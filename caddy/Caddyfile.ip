@@ -1,0 +1,12 @@
+{
+	admin off
+	auto_https off
+}
+
+import /etc/caddy/panel.snippet
+
+# Домена нет — работаем по чистому HTTP на PANEL_PORT.
+# Порт стоит закрыть файрволом на всё, кроме вашего IP.
+:{$PANEL_PORT:4250} {
+	import panel
+}

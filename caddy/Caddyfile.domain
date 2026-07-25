@@ -1,0 +1,12 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+}
+
+import /etc/caddy/panel.snippet
+
+# Caddy сам получает и продлевает сертификат Let's Encrypt для этого домена.
+{$PANEL_DOMAIN} {
+	import panel
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}

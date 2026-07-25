@@ -1,0 +1,106 @@
+name: vpn-panel
+
+x-common: &common
+  restart: unless-stopped
+  env_file: .env
+  networks: [vpnpanel]
+
+services:
+  postgres:
+    <<: *common
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  panel-api:
+    <<: *common
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes:
+      - backups:/app/backups
+      - uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  bot:
+    <<: *common
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      panel-api: {condition: service_healthy}
+
+  caddy:
+    <<: *common
+    image: caddy:2-alpine
+    # Порты задаются в docker-compose.domain.yml / docker-compose.ip.yml —
+    # нужный оверлей выбирает install.sh через COMPOSE_FILE в .env.
+    environment:
+      DEPLOY_MODE: ${DEPLOY_MODE}
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+      PANEL_PORT: ${PANEL_PORT:-4250}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./caddy/Caddyfile.${DEPLOY_MODE}:/etc/caddy/Caddyfile:ro
+      - ./caddy/panel.snippet:/etc/caddy/panel.snippet:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - frontend-dist:/srv:ro
+      - uploads:/srv-uploads:ro
+    depends_on:
+      - panel-api
+      - panel-web
+
+  # Собирает SPA в общий том и завершается.
+  panel-web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: .env
+    networks: [vpnpanel]
+    restart: "no"
+    volumes:
+      - frontend-dist:/dist
+
+networks:
+  vpnpanel:
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+  frontend-dist:
+  backups:
+  uploads:

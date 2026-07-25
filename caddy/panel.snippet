@@ -1,0 +1,30 @@
+# Общая часть для обоих режимов развёртывания.
+(panel) {
+	encode zstd gzip
+
+	# API и WebSocket → FastAPI
+	handle /api/* {
+		reverse_proxy panel-api:8000
+	}
+
+	# Фото рассылок — отдаются напрямую Caddy'ем, без захода в backend.
+	# Их же скачивают серверы Telegram при отправке сообщения.
+	handle_path /uploads/* {
+		root * /srv-uploads
+		file_server
+	}
+
+	# SPA: статика, всё остальное — на index.html (клиентский роутинг)
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+}
