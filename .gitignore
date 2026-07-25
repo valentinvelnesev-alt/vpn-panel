@@ -1,0 +1,23 @@
+# Секреты — никогда в репозиторий
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# Данные и бэкапы
+backups/
+*.sql
+*.dump
+
+.DS_Store

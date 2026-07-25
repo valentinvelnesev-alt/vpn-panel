@@ -1,0 +1,7 @@
+# Режим DEPLOY_MODE=ip: без домена, панель по HTTP на PANEL_PORT (дефолт 4250).
+# Порт открыт наружу без TLS — ограничьте доступ файрволом:
+#   ufw allow from <ваш-ip> to any port 4250 proto tcp
+services:
+  caddy:
+    ports:
+      - "${PANEL_PORT:-4250}:${PANEL_PORT:-4250}"

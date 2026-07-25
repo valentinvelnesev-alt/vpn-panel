@@ -1,0 +1,84 @@
+@import 'tailwindcss';
+
+/* Дизайн-система панели: спокойный тёмный интерфейс, один акцентный цвет.
+   Светлая тема — переопределением тех же переменных. */
+@theme {
+  --color-bg: oklch(0.15 0.012 265);
+  --color-surface: oklch(0.21 0.014 265);
+  --color-surface-hover: oklch(0.25 0.016 265);
+  --color-border: oklch(0.32 0.016 265);
+  --color-fg: oklch(0.96 0.003 265);
+  --color-muted: oklch(0.68 0.012 265);
+  --color-accent: oklch(0.68 0.16 250);
+  --color-accent-fg: oklch(0.16 0.008 265);
+  --color-success: oklch(0.72 0.16 150);
+  --color-warning: oklch(0.79 0.15 80);
+  --color-danger: oklch(0.65 0.2 25);
+
+  --radius-panel: 1.5rem;
+  --font-sans: 'Inter var', ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+html.light {
+  --color-bg: oklch(0.98 0.002 265);
+  --color-surface: oklch(1 0 0);
+  --color-surface-hover: oklch(0.96 0.004 265);
+  --color-border: oklch(0.9 0.006 265);
+  --color-fg: oklch(0.22 0.01 265);
+  --color-muted: oklch(0.52 0.014 265);
+  --color-accent-fg: oklch(0.99 0 0);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Видимый фокус — панелью пользуются с клавиатуры. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Полупрозрачные поверхности: сквозь них видно живой фон, но текст
+     остаётся читаемым за счёт размытия. */
+  .glass {
+    background: color-mix(in oklch, var(--color-surface) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid color-mix(in oklch, var(--color-border) 70%, transparent);
+  }
+
+  /* Тонкий блик по верхней кромке — карточка выглядит объёмной,
+     как физическое стекло, а не как плоский прямоугольник. */
+  .glass-sheen {
+    position: relative;
+  }
+  .glass-sheen::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding-top: 1px;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--color-fg) 12%, transparent),
+      transparent 60%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
