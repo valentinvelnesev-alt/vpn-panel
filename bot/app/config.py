@@ -24,6 +24,8 @@ class PlanView:
     squad_uuids: list[str]
     hwid_limit: int
     traffic_limit_bytes: int
+    category_id: int | None = None
+    category_title: str | None = None
 
     @property
     def price_rub(self) -> float:
@@ -41,6 +43,8 @@ def plan_view(row: PlanRow) -> PlanView:
         squad_uuids=list(row.squad_uuids or []),
         hwid_limit=row.hwid_limit,
         traffic_limit_bytes=row.traffic_limit_bytes,
+        category_id=row.category_id,
+        category_title=row.category.title if row.category else None,
     )
 
 
@@ -81,6 +85,8 @@ class Config:
     platega_enabled: bool = False
     platega_merchant_id: str | None = None
     platega_secret: str | None = None
+    rollypay_enabled: bool = False
+    rollypay_api_key: str | None = None
     cryptobot_enabled: bool = False
     cryptobot_token: str | None = None
     stars_enabled: bool = False
@@ -97,8 +103,11 @@ async def load(db: AsyncSession) -> Config:
     if row is None:
         row = BotConfig(id=1)
 
+    from sqlalchemy.orm import selectinload
+
     plans = await db.scalars(
         select(PlanRow)
+        .options(selectinload(PlanRow.category))
         .where(PlanRow.is_active.is_(True))
         .order_by(PlanRow.sort_order, PlanRow.days)
     )
@@ -111,6 +120,8 @@ async def load(db: AsyncSession) -> Config:
         "payment_platega_enabled",
         "payment_platega_merchant_id",
         "payment_platega_secret",
+        "payment_rollypay_enabled",
+        "payment_rollypay_api_key",
         "payment_cryptobot_enabled",
         "payment_cryptobot_token",
         "payment_stars_enabled",
@@ -152,6 +163,8 @@ async def load(db: AsyncSession) -> Config:
         platega_enabled=flag("payment_platega_enabled"),
         platega_merchant_id=raw.get("payment_platega_merchant_id"),
         platega_secret=raw.get("payment_platega_secret"),
+        rollypay_enabled=flag("payment_rollypay_enabled"),
+        rollypay_api_key=raw.get("payment_rollypay_api_key"),
         cryptobot_enabled=flag("payment_cryptobot_enabled"),
         cryptobot_token=raw.get("payment_cryptobot_token"),
         stars_enabled=flag("payment_stars_enabled"),

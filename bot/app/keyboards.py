@@ -33,12 +33,45 @@ def main_menu(
     return builder.as_markup()
 
 
-def plans_menu(config: Config, *, prefix: str = "buy"):
+def plan_categories(config: Config) -> list[tuple[int | None, str]]:
+    """Различные категории среди активных тарифов, в порядке появления.
+
+    None — «без категории»: тарифы, которым админ не назначил ни одной.
+    Возвращается только если у тарифов реально больше одной категории —
+    иначе бот показывает плоский список, как раньше (без лишней вкладки).
+    """
+    seen: dict[int | None, str] = {}
+    for plan in config.plans:
+        seen.setdefault(plan.category_id, plan.category_title or "Без категории")
+    if len(seen) <= 1:
+        return []
+    return list(seen.items())
+
+
+def categories_menu(config: Config, *, prefix: str = "buy"):
+    builder = InlineKeyboardBuilder()
+    for category_id, title in plan_categories(config):
+        builder.button(
+            text=title, callback_data=f"plancat:{prefix}:{category_id if category_id is not None else 0}"
+        )
+    builder.button(text="‹ Назад", callback_data="menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def plans_menu(config: Config, *, prefix: str = "buy", category_id: int | None = -1):
+    """category_id: -1 — без фильтра (все тарифы, старое поведение),
+    None — только тарифы без категории, иначе — тарифы этой категории."""
     builder = InlineKeyboardBuilder()
     for plan in config.plans:
+        if category_id != -1 and plan.category_id != category_id:
+            continue
         price = f"{plan.price_rub:.0f} ₽".replace(".0", "")
         builder.button(text=f"{plan.title} — {price}", callback_data=f"{prefix}:{plan.id}")
-    builder.button(text="‹ Назад", callback_data="menu")
+    builder.button(
+        text="‹ Назад",
+        callback_data="plans" if plan_categories(config) else "menu",
+    )
     builder.adjust(1)
     return builder.as_markup()
 
@@ -82,6 +115,8 @@ def providers_menu(config: Config, *, purpose: str, target: str):
     builder = InlineKeyboardBuilder()
     if config.platega_enabled:
         builder.button(text="СБП / карта", callback_data=f"pay:{purpose}:platega:{target}")
+    if config.rollypay_enabled:
+        builder.button(text="СБП (резерв)", callback_data=f"pay:{purpose}:rollypay:{target}")
     if config.cryptobot_enabled:
         builder.button(
             text="Криптовалюта", callback_data=f"pay:{purpose}:cryptobot:{target}"

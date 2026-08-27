@@ -19,6 +19,7 @@ from shared import bus
 from shared.db.models import Payment, PaymentProvider, PaymentStatus
 from shared.payments.cryptobot import CryptoBotClient, CryptoBotError
 from shared.payments.platega import PlategaClient, PlategaError
+from shared.payments.rollypay import RollyPayClient, RollyPayError
 
 log = logging.getLogger("webhooks")
 
@@ -69,6 +70,45 @@ async def platega_webhook(request: Request, db: DbSession) -> dict:
         return {"ok": False, "reason": "verification failed"}
 
     if not PlategaClient.is_paid(transaction):
+        return {"ok": True, "applied": False}
+
+    await _mark_paid(db, payment)
+    return {"ok": True, "applied": True}
+
+
+@router.post("/rollypay")
+async def rollypay_webhook(request: Request, db: DbSession) -> dict:
+    body = await request.json()
+
+    external_id = str(body.get("payment_id") or body.get("order_id") or "")
+    if not external_id:
+        return {"ok": False, "reason": "no payment_id in payload"}
+
+    payment = await db.scalar(
+        select(Payment).where(
+            Payment.provider == PaymentProvider.ROLLYPAY,
+            Payment.external_id == external_id,
+        )
+    )
+    if payment is None:
+        log.warning("RollyPay webhook: платёж %s не найден", external_id)
+        return {"ok": False, "reason": "payment not found"}
+
+    payment.raw_payload = body if isinstance(body, dict) else None
+
+    api_key = await cfg.get(db, cfg.ROLLYPAY_API_KEY)
+    if not api_key:
+        log.error("RollyPay webhook пришёл, но провайдер не настроен")
+        return {"ok": False, "reason": "provider not configured"}
+
+    client = RollyPayClient(api_key)
+    try:
+        remote = await client.get_payment(external_id)
+    except RollyPayError as exc:
+        log.error("Не удалось подтвердить платёж RollyPay %s: %s", external_id, exc)
+        return {"ok": False, "reason": "verification failed"}
+
+    if not RollyPayClient.is_paid(remote):
         return {"ok": True, "applied": False}
 
     await _mark_paid(db, payment)

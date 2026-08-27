@@ -9,7 +9,7 @@ from app.services import telegram
 from app.services.telegram import TelegramError
 from shared import bus
 from shared.crypto import decrypt, encrypt, mask
-from shared.db.models import AuditLog, BotConfig, BotState, EmojiMode, Plan
+from shared.db.models import AuditLog, BotConfig, BotState, EmojiMode, Plan, PlanCategory
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -315,6 +315,7 @@ class PlanIn(BaseModel):
     squad_uuids: list[str] = Field(default_factory=list)
     hwid_limit: int = Field(default=3, ge=1, le=100)
     traffic_limit_bytes: int = Field(default=0, ge=0)
+    category_id: int | None = None
     is_active: bool = True
     sort_order: int = 0
 
@@ -332,9 +333,79 @@ def _plan_out(plan: Plan) -> PlanOut:
         squad_uuids=list(plan.squad_uuids or []),
         hwid_limit=plan.hwid_limit,
         traffic_limit_bytes=plan.traffic_limit_bytes,
+        category_id=plan.category_id,
         is_active=plan.is_active,
         sort_order=plan.sort_order,
     )
+
+
+# ── Категории тарифов ────────────────────────────────────────────────
+class PlanCategoryIn(BaseModel):
+    title: str = Field(min_length=1, max_length=64)
+    sort_order: int = 0
+
+
+class PlanCategoryOut(PlanCategoryIn):
+    id: int
+
+
+@router.get("/plan-categories", response_model=list[PlanCategoryOut])
+async def list_plan_categories(
+    admin: CurrentAdmin, db: DbSession
+) -> list[PlanCategoryOut]:
+    rows = await db.scalars(
+        select(PlanCategory).order_by(PlanCategory.sort_order, PlanCategory.title)
+    )
+    return [PlanCategoryOut(id=r.id, title=r.title, sort_order=r.sort_order) for r in rows]
+
+
+@router.post(
+    "/plan-categories",
+    response_model=PlanCategoryOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_plan_category(
+    data: PlanCategoryIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> PlanCategoryOut:
+    row = PlanCategory(title=data.title, sort_order=data.sort_order)
+    db.add(row)
+    _audit(db, admin, "bot.plan_category.create", request, title=data.title)
+    await db.flush()
+    await bus.publish(bus.CMD_RELOAD)
+    return PlanCategoryOut(id=row.id, title=row.title, sort_order=row.sort_order)
+
+
+@router.put("/plan-categories/{category_id}", response_model=PlanCategoryOut)
+async def update_plan_category(
+    category_id: int,
+    data: PlanCategoryIn,
+    admin: CurrentAdmin,
+    db: DbSession,
+    request: Request,
+) -> PlanCategoryOut:
+    row = await db.get(PlanCategory, category_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
+    row.title = data.title
+    row.sort_order = data.sort_order
+    _audit(db, admin, "bot.plan_category.update", request, category_id=category_id)
+    await db.flush()
+    await bus.publish(bus.CMD_RELOAD)
+    return PlanCategoryOut(id=row.id, title=row.title, sort_order=row.sort_order)
+
+
+@router.delete("/plan-categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_plan_category(
+    category_id: int, admin: CurrentAdmin, db: DbSession, request: Request
+) -> None:
+    """Удаляет категорию. Тарифы в ней не удаляются — просто становятся без
+    категории (ON DELETE SET NULL), чтобы случайное удаление вкладки не
+    стёрло тарифы, которыми уже кто-то пользуется."""
+    result = await db.execute(delete(PlanCategory).where(PlanCategory.id == category_id))
+    if result.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
+    _audit(db, admin, "bot.plan_category.delete", request, category_id=category_id)
+    await bus.publish(bus.CMD_RELOAD)
 
 
 @router.get("/plans", response_model=list[PlanOut])
@@ -355,6 +426,7 @@ async def create_plan(
         squad_uuids=data.squad_uuids,
         hwid_limit=data.hwid_limit,
         traffic_limit_bytes=data.traffic_limit_bytes,
+        category_id=data.category_id,
         is_active=data.is_active,
         sort_order=data.sort_order,
     )
@@ -383,6 +455,7 @@ async def update_plan(
     plan.squad_uuids = data.squad_uuids
     plan.hwid_limit = data.hwid_limit
     plan.traffic_limit_bytes = data.traffic_limit_bytes
+    plan.category_id = data.category_id
     plan.is_active = data.is_active
     plan.sort_order = data.sort_order
 
