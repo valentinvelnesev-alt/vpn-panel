@@ -123,11 +123,20 @@ if $COMPOSE exec -T panel-api python -m app.cli admin-exists 2>/dev/null; then
 else
 	c '1;37' "
   Создайте администратора панели."
-	read -rp  "  Логин: " login
-	read -rsp "  Пароль (минимум 12 символов): " pass; echo
-	read -rsp "  Повторите пароль: " pass2; echo
-	[ "$pass" = "$pass2" ] || die "пароли не совпадают"
-	[ ${#pass} -ge 12 ]    || die "пароль слишком короткий"
+	read -rp "  Логин: " login
+	while true; do
+		read -rsp "  Пароль (минимум 12 символов): " pass; echo
+		if [ ${#pass} -lt 12 ]; then
+			err "пароль слишком короткий, попробуйте снова"
+			continue
+		fi
+		read -rsp "  Повторите пароль: " pass2; echo
+		if [ "$pass" != "$pass2" ]; then
+			err "пароли не совпадают, попробуйте снова"
+			continue
+		fi
+		break
+	done
 	ADMIN_LOGIN="$login" ADMIN_PASSWORD="$pass" \
 		$COMPOSE exec -T -e ADMIN_LOGIN -e ADMIN_PASSWORD panel-api \
 		python -m app.cli create-admin || die "не удалось создать администратора"
