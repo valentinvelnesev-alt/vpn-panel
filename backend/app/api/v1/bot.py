@@ -65,6 +65,7 @@ class BotStatusOut(BaseModel):
     node_alerts_chat_id: int | None
 
     purchase_notify_chat_id: int | None
+    admin_telegram_ids: list[int]
 
 
 def _status(row: BotConfig) -> BotStatusOut:
@@ -93,6 +94,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         node_alerts_enabled=row.node_alerts_enabled,
         node_alerts_chat_id=row.node_alerts_chat_id,
         purchase_notify_chat_id=row.purchase_notify_chat_id,
+        admin_telegram_ids=list(row.admin_telegram_ids or []),
     )
 
 
@@ -212,6 +214,9 @@ class BotSettingsIn(BaseModel):
     # Уведомление о каждой продаже в чат/группу (бот должен состоять в ней).
     # Пусто/0 — уведомления отключены.
     purchase_notify_chat_id: int | None = None
+
+    # Telegram ID, которым в самом боте открывается команда /admin.
+    admin_telegram_ids: list[int] = Field(default_factory=list)
 
 
 @router.put("/settings", response_model=BotStatusOut)

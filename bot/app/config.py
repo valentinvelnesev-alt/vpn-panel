@@ -76,6 +76,7 @@ class Config:
     referral_level2_percent: int = 5
 
     purchase_notify_chat_id: int | None = None
+    admin_telegram_ids: list[int] = field(default_factory=list)
 
     plans: list[PlanView] = field(default_factory=list)
 
@@ -157,6 +158,7 @@ async def load(db: AsyncSession) -> Config:
         referral_level1_percent=row.referral_level1_percent,
         referral_level2_percent=row.referral_level2_percent,
         purchase_notify_chat_id=row.purchase_notify_chat_id,
+        admin_telegram_ids=list(row.admin_telegram_ids or []),
         plans=[plan_view(p) for p in plans],
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),
