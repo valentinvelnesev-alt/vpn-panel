@@ -75,7 +75,7 @@ async def grant(
     try:
         if user.remnawave_uuid:
             remote = await client.update_user(
-                user.remnawave_uuid,
+                int(user.remnawave_uuid),
                 expireAt=expire_at.isoformat(),
                 status="ACTIVE",
                 activeInternalSquads=squad_uuids,
@@ -94,7 +94,7 @@ async def grant(
     finally:
         await client.aclose()
 
-    user.remnawave_uuid = remote.uuid
+    user.remnawave_uuid = str(remote.id)
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 
@@ -152,7 +152,7 @@ async def grant_bonus_days(
     client = client_for(config)
     try:
         if user.remnawave_uuid:
-            remote = await client.extend_expiration(user.remnawave_uuid, expire_at)
+            remote = await client.extend_expiration(int(user.remnawave_uuid), expire_at)
         else:
             remote = await client.create_user(
                 username=_username_for(user.telegram_id),
@@ -165,7 +165,7 @@ async def grant_bonus_days(
     finally:
         await client.aclose()
 
-    user.remnawave_uuid = remote.uuid
+    user.remnawave_uuid = str(remote.id)
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 

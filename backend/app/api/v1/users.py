@@ -18,7 +18,7 @@ class SquadOut(BaseModel):
 
 
 class UserOut(BaseModel):
-    uuid: str
+    id: int
     username: str
     status: str
     expire_at: datetime | None
@@ -38,7 +38,7 @@ class UserOut(BaseModel):
     @classmethod
     def of(cls, user: User) -> "UserOut":
         return cls(
-            uuid=user.uuid,
+            id=user.id,
             username=user.username,
             status=user.status.value,
             expire_at=user.expire_at,
@@ -80,11 +80,6 @@ async def list_users(
     size: int = Query(50, ge=1, le=500),
     search: str = Query("", max_length=128),
 ) -> UserPageOut:
-    """Список с постраничной выдачей; поиск идёт по точным эндпоинтам API.
-
-    В Remnawave у /api/users нет параметра поиска, поэтому по строке запроса
-    выбираем подходящий эндпоинт: телеграм-id, e-mail или имя пользователя.
-    """
     query = search.strip()
     if not query:
         page = await client.get_users(start=start, size=size)
@@ -100,7 +95,6 @@ async def list_users(
         else:
             found = await client.get_users_by_username(query)
     except RemnawaveError as exc:
-        # 404 на поиске — это «не найдено», а не сбой.
         if exc.status_code == 404:
             return UserPageOut(users=[], total=0)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
@@ -118,8 +112,6 @@ class StatusCounts(BaseModel):
 
 @router.get("/status-counts", response_model=StatusCounts)
 async def status_counts(admin: CurrentAdmin, client: Remnawave) -> StatusCounts:
-    """Плашки-счётчики над таблицей. Берутся из /api/system/stats, а не
-    пересчитываются по странице — иначе цифры зависели бы от пагинации."""
     try:
         stats = await client.get_stats()
     except RemnawaveError as exc:
@@ -136,9 +128,6 @@ async def status_counts(admin: CurrentAdmin, client: Remnawave) -> StatusCounts:
 
 
 class UserUpdateIn(BaseModel):
-    """Поля, которые панель разрешает править. Всё необязательное —
-    отправляем в Remnawave только то, что реально пришло."""
-
     expire_at: datetime | None = None
     status: str | None = Field(default=None, pattern="^(ACTIVE|DISABLED)$")
     traffic_limit_bytes: int | None = Field(default=None, ge=0)
@@ -153,9 +142,9 @@ class UserUpdateIn(BaseModel):
     squad_uuids: list[str] | None = None
 
 
-@router.patch("/{uuid}", response_model=UserOut)
+@router.patch("/{user_id}", response_model=UserOut)
 async def update_user(
-    uuid: str,
+    user_id: int,
     data: UserUpdateIn,
     admin: CurrentAdmin,
     db: DbSession,
@@ -190,7 +179,7 @@ async def update_user(
         )
 
     try:
-        updated = await client.update_user(uuid, **fields)
+        updated = await client.update_user(user_id, **fields)
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
@@ -198,7 +187,7 @@ async def update_user(
         AuditLog(
             admin_id=admin.id,
             action="user.update",
-            target=uuid,
+            target=str(user_id),
             details={"fields": sorted(fields)},
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
@@ -208,10 +197,10 @@ async def update_user(
     return UserOut.of(updated)
 
 
-@router.get("/{uuid}", response_model=UserOut)
-async def get_user(uuid: str, admin: CurrentAdmin, client: Remnawave) -> UserOut:
+@router.get("/{user_id}", response_model=UserOut)
+async def get_user(user_id: int, admin: CurrentAdmin, client: Remnawave) -> UserOut:
     try:
-        return UserOut.of(await client.get_user(uuid))
+        return UserOut.of(await client.get_user(user_id))
     except RemnawaveError as exc:
         code = status.HTTP_404_NOT_FOUND if exc.status_code == 404 else status.HTTP_502_BAD_GATEWAY
         raise HTTPException(code, str(exc)) from exc
@@ -221,21 +210,20 @@ class ExtendIn(BaseModel):
     days: int = Field(ge=1, le=3650)
 
 
-@router.post("/{uuid}/extend", response_model=UserOut)
+@router.post("/{user_id}/extend", response_model=UserOut)
 async def extend_user(
-    uuid: str,
+    user_id: int,
     data: ExtendIn,
     admin: CurrentAdmin,
     db: DbSession,
     client: Remnawave,
     request: Request,
 ) -> UserOut:
-    """Ручная выдача дней. Отсчёт от текущей даты, если подписка уже истекла."""
     try:
-        user = await client.get_user(uuid)
+        user = await client.get_user(user_id)
         now = datetime.now(UTC)
         base = user.expire_at if user.expire_at and user.expire_at > now else now
-        updated = await client.extend_expiration(uuid, base + timedelta(days=data.days))
+        updated = await client.extend_expiration(user_id, base + timedelta(days=data.days))
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
@@ -243,7 +231,7 @@ async def extend_user(
         AuditLog(
             admin_id=admin.id,
             action="user.extend",
-            target=uuid,
+            target=str(user_id),
             details={"days": data.days},
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
@@ -257,9 +245,9 @@ class StatusIn(BaseModel):
     status: str = Field(pattern="^(ACTIVE|DISABLED)$")
 
 
-@router.post("/{uuid}/status", response_model=UserOut)
+@router.post("/{user_id}/status", response_model=UserOut)
 async def set_status(
-    uuid: str,
+    user_id: int,
     data: StatusIn,
     admin: CurrentAdmin,
     db: DbSession,
@@ -267,7 +255,7 @@ async def set_status(
     request: Request,
 ) -> UserOut:
     try:
-        updated = await client.set_status(uuid, data.status)
+        updated = await client.set_status(user_id, data.status)
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
@@ -275,7 +263,7 @@ async def set_status(
         AuditLog(
             admin_id=admin.id,
             action="user.status",
-            target=uuid,
+            target=str(user_id),
             details={"status": data.status},
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
@@ -286,12 +274,12 @@ async def set_status(
 
 
 # ── Устройства ────────────────────────────────────────────────────────
-@router.get("/{uuid}/devices", response_model=list[DeviceOut])
+@router.get("/{user_id}/devices", response_model=list[DeviceOut])
 async def list_devices(
-    uuid: str, admin: CurrentAdmin, client: Remnawave
+    user_id: int, admin: CurrentAdmin, client: Remnawave
 ) -> list[DeviceOut]:
     try:
-        devices = await client.get_devices(uuid)
+        devices = await client.get_devices(user_id)
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return [
@@ -306,9 +294,9 @@ async def list_devices(
     ]
 
 
-@router.delete("/{uuid}/devices/{hwid}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}/devices/{hwid}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_device(
-    uuid: str,
+    user_id: int,
     hwid: str,
     admin: CurrentAdmin,
     db: DbSession,
@@ -316,14 +304,14 @@ async def delete_device(
     request: Request,
 ) -> None:
     try:
-        await client.delete_device(uuid, hwid)
+        await client.delete_device(user_id, hwid)
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     db.add(
         AuditLog(
             admin_id=admin.id,
             action="user.device.delete",
-            target=uuid,
+            target=str(user_id),
             details={"hwid": hwid},
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
@@ -331,23 +319,23 @@ async def delete_device(
     )
 
 
-@router.delete("/{uuid}/devices", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}/devices", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_devices(
-    uuid: str,
+    user_id: int,
     admin: CurrentAdmin,
     db: DbSession,
     client: Remnawave,
     request: Request,
 ) -> None:
     try:
-        await client.delete_all_devices(uuid)
+        await client.delete_all_devices(user_id)
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     db.add(
         AuditLog(
             admin_id=admin.id,
             action="user.device.reset",
-            target=uuid,
+            target=str(user_id),
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
         )

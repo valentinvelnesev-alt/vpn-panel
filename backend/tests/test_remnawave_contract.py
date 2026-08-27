@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 SPEC_PATH = (
-    Path(__file__).resolve().parents[2] / "shared/openapi/remnawave-2.8.1.json"
+    Path(__file__).resolve().parents[2] / "shared/openapi/remnawave-2.9.json"
 )
 
 # (метод, путь) — ровно то, что дёргает RemnawaveClient.
@@ -32,16 +32,15 @@ CALLED_ENDPOINTS = [
     ("get", "/api/users"),
     ("post", "/api/users"),
     ("patch", "/api/users"),
-    ("get", "/api/users/{uuid}"),
-    ("get", "/api/users/by-telegram-id/{telegramId}"),
+    ("get", "/api/users/{userId}"),
+    ("get", "/api/users/stream"),
     ("get", "/api/users/by-username/{username}"),
-    ("get", "/api/users/by-email/{email}"),
     ("post", "/api/users/bulk/extend-expiration-date"),
     ("post", "/api/users/bulk/reset-traffic"),
     ("post", "/api/users/bulk/update-squads"),
     ("post", "/api/users/bulk/delete"),
     ("get", "/api/internal-squads"),
-    ("get", "/api/hwid/devices/{userUuid}"),
+    ("get", "/api/hwid/devices/{userId}"),
     ("post", "/api/hwid/devices/delete"),
     ("post", "/api/hwid/devices/delete-all"),
 ]
@@ -55,13 +54,13 @@ REQUIRED_FIELDS = {
     ),
     ("get", "/api/users"): (
         "response.users[]",
-        ["uuid", "username", "status", "expireAt", "telegramId", "subscriptionUrl"],
+        ["id", "username", "status", "expireAt", "telegramId", "subscriptionUrl"],
     ),
     ("get", "/api/system/stats"): (
         "response",
         ["users", "onlineStats", "nodes"],
     ),
-    ("get", "/api/hwid/devices/{userUuid}"): (
+    ("get", "/api/hwid/devices/{userId}"): (
         "response.devices[]",
         ["hwid", "platform", "deviceModel"],
     ),

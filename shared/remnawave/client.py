@@ -1,7 +1,15 @@
-"""Асинхронный клиент Remnawave API 2.8.1.
+"""Асинхронный клиент Remnawave API.
 
-Все ответы Remnawave завёрнуты в {"response": …} — метод `_get`/`_post`
+Все ответы Remnawave завёрнуты в {"response": …} — метод `_request`
 разворачивает это один раз, чтобы вызывающий код не думал об обёртке.
+
+Изменения API >= 2.9:
+  - User.uuid убран, первичный ключ теперь User.id (int)
+  - /api/users/{userId} принимает числовой id
+  - /api/users/by-telegram-id удалён → используем /api/users/stream?telegramId=
+  - /api/users/by-email удалён → используем /api/users/stream?email=
+  - bulk-операции принимают userIds (list[int]) вместо uuids (list[str])
+  - PATCH /api/users принимает id (int), не uuid
 """
 
 import logging
@@ -87,18 +95,10 @@ class RemnawaveClient:
         if not response.content:
             return None
         body = response.json()
-        # Ответы обёрнуты в {"response": …}; у пустых 204 обёртки нет.
         return body.get("response", body) if isinstance(body, dict) else body
 
     @staticmethod
     def _parse(model: Any, data: Any) -> Any:
-        """Разбирает ответ Remnawave, превращая расхождение со схемой в
-        RemnawaveError.
-
-        Иначе ValidationError улетает наружу как 500 «внутренняя ошибка
-        панели», хотя виноват ответ внешнего сервиса, — а по 502 сразу
-        понятно, где искать причину.
-        """
         try:
             return (
                 model.validate_python(data)
@@ -123,7 +123,6 @@ class RemnawaveClient:
 
     # ── Проверка подключения ──────────────────────────────────────────
     async def check_connection(self) -> dict[str, Any]:
-        """Дёргается кнопкой «Проверить подключение» в настройках панели."""
         return await self._get("/api/system/metadata") or {}
 
     async def get_stats(self) -> SystemStats:
@@ -153,22 +152,28 @@ class RemnawaveClient:
         data = await self._get("/api/users", params={"start": start, "size": size})
         return self._parse(UserPage, data)
 
-    async def get_user(self, uuid: str) -> User:
-        return self._parse(User, await self._get(f"/api/users/{uuid}"))
+    async def get_user(self, user_id: int) -> User:
+        return self._parse(User, await self._get(f"/api/users/{user_id}"))
 
     async def get_users_by_telegram_id(self, telegram_id: int) -> list[User]:
-        return self._parse(
-            _users, await self._get(f"/api/users/by-telegram-id/{telegram_id}") or []
+        # /api/users/by-telegram-id удалён в новом API — используем stream
+        data = await self._get(
+            "/api/users/stream", params={"telegramId": str(telegram_id), "size": 100}
         )
+        users = data.get("users", []) if isinstance(data, dict) else (data or [])
+        return self._parse(_users, users)
 
     async def get_users_by_username(self, username: str) -> list[User]:
-        # Эндпоинт отдаёт одного пользователя — приводим к списку, чтобы
-        # поиск в панели обрабатывал все варианты одинаково.
         data = await self._get(f"/api/users/by-username/{username}")
         return self._parse(_users, [data] if isinstance(data, dict) else data or [])
 
     async def get_users_by_email(self, email: str) -> list[User]:
-        return self._parse(_users, await self._get(f"/api/users/by-email/{email}") or [])
+        # /api/users/by-email удалён в новом API — используем stream
+        data = await self._get(
+            "/api/users/stream", params={"email": email, "size": 100}
+        )
+        users = data.get("users", []) if isinstance(data, dict) else (data or [])
+        return self._parse(_users, users)
 
     async def create_user(
         self,
@@ -185,13 +190,11 @@ class RemnawaveClient:
     ) -> User:
         payload: dict[str, Any] = {
             "username": username,
-            "expireAt": expire_at.isoformat(),
+            "expireAt": expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "activeInternalSquads": internal_squad_uuids,
             "trafficLimitBytes": traffic_limit_bytes,
             "status": "ACTIVE",
         }
-        # Лимит устройств и сквады приходят из настроек тарифа в панели,
-        # а не зашиты в коде, как было в старом боте.
         if telegram_id is not None:
             payload["telegramId"] = telegram_id
         if email:
@@ -205,59 +208,60 @@ class RemnawaveClient:
 
         return self._parse(User, await self._post("/api/users", json=payload))
 
-    async def update_user(self, uuid: str, **fields: Any) -> User:
-        """Частичное обновление. Ключи — как в API: expireAt, status и т. д."""
-        payload = {"uuid": uuid, **fields}
+    async def update_user(self, user_id: int, **fields: Any) -> User:
+        """Частичное обновление. user_id — целочисленный id пользователя."""
+        payload = {"id": user_id, **fields}
         return self._parse(User, await self._patch("/api/users", json=payload))
 
-    async def extend_expiration(self, uuid: str, new_expire_at: datetime) -> User:
-        return await self.update_user(uuid, expireAt=new_expire_at.isoformat())
-
-    async def set_status(self, uuid: str, status: str) -> User:
-        return await self.update_user(uuid, status=status)
-
-    # ── Массовые операции ─────────────────────────────────────────────
-    async def bulk_extend_expiration(self, uuids: list[str], days: int) -> None:
-        await self._post(
-            "/api/users/bulk/extend-expiration-date",
-            json={"uuids": uuids, "days": days},
+    async def extend_expiration(self, user_id: int, new_expire_at: datetime) -> User:
+        return await self.update_user(
+            user_id, expireAt=new_expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         )
 
-    async def bulk_reset_traffic(self, uuids: list[str]) -> None:
-        await self._post("/api/users/bulk/reset-traffic", json={"uuids": uuids})
+    async def set_status(self, user_id: int, status: str) -> User:
+        return await self.update_user(user_id, status=status)
+
+    # ── Массовые операции ─────────────────────────────────────────────
+    async def bulk_extend_expiration(self, user_ids: list[int], days: int) -> None:
+        await self._post(
+            "/api/users/bulk/extend-expiration-date",
+            json={"userIds": user_ids, "extendDays": days},
+        )
+
+    async def bulk_reset_traffic(self, user_ids: list[int]) -> None:
+        await self._post("/api/users/bulk/reset-traffic", json={"userIds": user_ids})
 
     async def bulk_update_squads(
-        self, uuids: list[str], internal_squad_uuids: list[str]
+        self, user_ids: list[int], internal_squad_uuids: list[str]
     ) -> None:
         await self._post(
             "/api/users/bulk/update-squads",
-            json={"uuids": uuids, "activeInternalSquads": internal_squad_uuids},
+            json={"userIds": user_ids, "activeInternalSquads": internal_squad_uuids},
         )
 
-    async def bulk_delete(self, uuids: list[str]) -> None:
-        await self._post("/api/users/bulk/delete", json={"uuids": uuids})
+    async def bulk_delete(self, user_ids: list[int]) -> None:
+        await self._post("/api/users/bulk/delete", json={"userIds": user_ids})
 
     # ── Сквады ────────────────────────────────────────────────────────
     async def get_internal_squads(self) -> list[dict[str, Any]]:
-        """Список сквадов для выпадающего списка в настройках тарифа."""
         data = await self._get("/api/internal-squads")
         if isinstance(data, dict):
             data = data.get("internalSquads", [])
         return data or []
 
     # ── Устройства (HWID) ─────────────────────────────────────────────
-    async def get_devices(self, user_uuid: str) -> list[Device]:
-        data = await self._get(f"/api/hwid/devices/{user_uuid}")
+    async def get_devices(self, user_id: int) -> list[Device]:
+        data = await self._get(f"/api/hwid/devices/{user_id}")
         items = data.get("devices", []) if isinstance(data, dict) else (data or [])
         return self._parse(_devices, items)
 
-    async def delete_device(self, user_uuid: str, hwid: str) -> None:
+    async def delete_device(self, user_id: int, hwid: str) -> None:
         await self._post(
-            "/api/hwid/devices/delete", json={"userUuid": user_uuid, "hwid": hwid}
+            "/api/hwid/devices/delete", json={"userId": user_id, "hwid": hwid}
         )
 
-    async def delete_all_devices(self, user_uuid: str) -> None:
-        await self._post("/api/hwid/devices/delete-all", json={"userUuid": user_uuid})
+    async def delete_all_devices(self, user_id: int) -> None:
+        await self._post("/api/hwid/devices/delete-all", json={"userId": user_id})
 
 
 def _extract_error(response: httpx.Response) -> str:
@@ -267,4 +271,4 @@ def _extract_error(response: httpx.Response) -> str:
         return response.text[:200] or "без описания"
     if isinstance(body, dict):
         return str(body.get("message") or body.get("error") or body)[:200]
-    return str(body)[:200]
+    return str(body)
