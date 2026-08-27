@@ -208,6 +208,13 @@ class BotConfig(Base, TimestampMixin):
         BigInteger, default=None
     )
 
+    # Telegram ID администраторов — им бот открывает команду /admin со
+    # встроенной статистикой. Не путать с админами веб-панели (таблица
+    # admins): это про доступ внутри самого Telegram-бота.
+    admin_telegram_ids: Mapped[list[int]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+
     # Алерты о падении нод (Pro) — шлются этому чату из бота.
     node_alerts_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

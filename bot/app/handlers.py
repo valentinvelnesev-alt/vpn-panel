@@ -42,11 +42,15 @@ def build_dispatcher(*, storage: BaseStorage, config: Config) -> Dispatcher:
     # aiogram не даёт повторно прикрепить Router к новому Dispatcher, если
     # он уже был прикреплён к старому (start → stop → start), поэтому явно
     # открепляем перед каждой пересборкой.
+    from app import admin
+
     router._parent_router = None
+    admin.router._parent_router = None
     dispatcher = Dispatcher(storage=storage)
     # Конфиг кладём в контекст: хендлеры получают его аргументом и не лезут
     # в глобальные переменные.
     dispatcher["config"] = config
+    dispatcher.include_router(admin.router)
     dispatcher.include_router(router)
     return dispatcher
 

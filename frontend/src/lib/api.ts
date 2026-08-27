@@ -181,6 +181,7 @@ export interface BotSettings {
   trial_squad_uuids: string[]
   trial_hwid_limit: number
   purchase_notify_chat_id: number | null
+  admin_telegram_ids: number[]
 }
 
 export interface BotStatus extends BotSettings {

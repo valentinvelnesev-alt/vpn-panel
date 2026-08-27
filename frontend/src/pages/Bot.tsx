@@ -273,6 +273,27 @@ function SettingsCard({ status }: { status: BotStatus }) {
           отключить уведомления о продажах.
         </p>
 
+        <Field
+          label="Администраторы бота (Telegram ID через запятую)"
+          hint="Этим ID в самом боте открывается команда /admin со статистикой. Свой ID можно узнать у @userinfobot."
+        >
+          <Input
+            value={form.admin_telegram_ids.join(', ')}
+            onChange={(e) =>
+              set(
+                'admin_telegram_ids',
+                e.target.value
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .map(Number)
+                  .filter((n) => Number.isFinite(n)),
+              )
+            }
+            placeholder="123456789, 987654321"
+          />
+        </Field>
+
         {save.isSuccess && <p className="text-sm text-success">Сохранено</p>}
         {save.isError && (
           <p className="text-sm text-danger">{(save.error as Error).message}</p>
