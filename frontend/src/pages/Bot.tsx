@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Play, Sparkles, Square, XCircle } from 'lucide-react'
+import { CheckCircle2, Play, Square, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type BotStatus, type BotSettings } from '@/lib/api'
@@ -33,7 +33,11 @@ function TokenCard({ status }: { status: BotStatus }) {
     onSuccess: refresh,
   })
 
-  const [colour, label] = STATE_LABEL[status.state]
+  // enabled=true, но состояние ещё «остановлен» — команда ушла супервизору,
+  // но он не успел отчитаться. Без этого пользователь видит «остановлен»
+  // сразу после нажатия «Запустить» и решает, что кнопка не сработала.
+  const starting = status.enabled && status.state === 'stopped'
+  const [colour, label] = starting ? ['bg-warning animate-pulse', 'запускается…'] : STATE_LABEL[status.state]
   const replacing = status.configured
 
   return (
@@ -134,11 +138,11 @@ function TokenCard({ status }: { status: BotStatus }) {
               variant={status.enabled ? 'danger' : 'primary'}
               className="ml-auto"
               onClick={() => toggle.mutate()}
-              disabled={toggle.isPending}
+              disabled={toggle.isPending || starting}
             >
               {status.enabled ? (
                 <>
-                  <Square className="size-4" /> Остановить
+                  <Square className="size-4" /> {starting ? 'Запускается…' : 'Остановить'}
                 </>
               ) : (
                 <>
@@ -149,106 +153,6 @@ function TokenCard({ status }: { status: BotStatus }) {
           )}
         </div>
       </form>
-    </Card>
-  )
-}
-
-function EmojiCard({ status }: { status: BotStatus }) {
-  const queryClient = useQueryClient()
-  const [chatId, setChatId] = useState('')
-  const [ids, setIds] = useState(
-    () => JSON.stringify(status.premium_emoji, null, 2) || '{}',
-  )
-
-  const apply = useMutation({
-    mutationFn: (mode: 'plain' | 'premium') =>
-      panel.setEmojiMode({
-        mode,
-        premium_emoji: mode === 'premium' ? JSON.parse(ids || '{}') : {},
-        test_chat_id: chatId ? Number(chatId) : undefined,
-      }),
-    onSuccess: (data) => queryClient.setQueryData(['bot'], data.status),
-  })
-
-  const premium = status.emoji_mode === 'premium'
-
-  return (
-    <Card>
-      <div className="flex items-center gap-2">
-        <Sparkles className="size-4 text-accent" />
-        <h2 className="font-medium">Эмодзи в сообщениях</h2>
-      </div>
-
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        {(
-          [
-            ['plain', 'Обычные', 'Работают у всех и всегда'],
-            ['premium', 'Премиум', 'Анимированные кастомные эмодзи'],
-          ] as const
-        ).map(([mode, title, hint]) => (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => apply.mutate(mode)}
-            disabled={apply.isPending}
-            className={`rounded-2xl border p-3 text-left transition-colors ${
-              (mode === 'premium') === premium
-                ? 'border-accent bg-accent/10'
-                : 'hover:bg-surface-hover'
-            }`}
-          >
-            <div className="text-sm font-medium">{title}</div>
-            <div className="text-xs text-muted">{hint}</div>
-          </button>
-        ))}
-      </div>
-
-      <p className="mt-4 rounded-2xl bg-warning/10 px-3 py-2 text-xs text-warning">
-        Если хотите с премиум-эмодзи — на аккаунте, на котором бот создан в
-        @BotFather, должен быть активен Telegram Premium. Панель проверит это:
-        отправит боту тестовое сообщение и включит режим, только если Telegram
-        его примет.
-      </p>
-
-      <div className="mt-4 space-y-4">
-        <Field
-          label="Ваш Telegram ID"
-          hint="Куда прислать проверочное сообщение. Напишите боту /start, иначе он не сможет вам ответить."
-        >
-          <Input
-            value={chatId}
-            onChange={(e) => setChatId(e.target.value)}
-            inputMode="numeric"
-            placeholder="123456789"
-          />
-        </Field>
-
-        <Field
-          label="Соответствие иконок и премиум-эмодзи"
-          hint="JSON вида {&quot;shield&quot;: &quot;5237699328843200968&quot;}. ID берётся из пересланного сообщения с нужным эмодзи — универсальных значений не существует."
-        >
-          <textarea
-            value={ids}
-            onChange={(e) => setIds(e.target.value)}
-            rows={4}
-            spellCheck={false}
-            className="w-full rounded-2xl border bg-bg p-3 font-mono text-xs"
-          />
-        </Field>
-      </div>
-
-      {apply.data && (
-        <p
-          className={`mt-3 text-sm ${
-            apply.data.ok ? 'text-success' : 'text-danger'
-          }`}
-        >
-          {apply.data.message}
-        </p>
-      )}
-      {apply.isError && (
-        <p className="mt-3 text-sm text-danger">{(apply.error as Error).message}</p>
-      )}
     </Card>
   )
 }
@@ -278,19 +182,6 @@ function SettingsCard({ status }: { status: BotStatus }) {
           save.mutate()
         }}
       >
-        <Field
-          label="Приветствие"
-          hint="Можно использовать {@shield}, {@gift} и другие иконки, а также {brand}."
-        >
-          <textarea
-            value={form.welcome_text ?? ''}
-            onChange={(e) => set('welcome_text', e.target.value)}
-            rows={3}
-            className="w-full rounded-2xl border bg-bg p-3 text-sm"
-            placeholder="{@shield} Добро пожаловать!"
-          />
-        </Field>
-
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Ссылка на поддержку">
             <Input
@@ -399,7 +290,14 @@ export default function Bot() {
   const { data: status, isPending } = useQuery({
     queryKey: ['bot'],
     queryFn: panel.botStatus,
-    refetchInterval: 15_000,
+    // Пока супервизор ещё не отчитался (команда ушла, а состояние в БД
+    // всё ещё «остановлен») — опрашиваем часто, чтобы увидеть переход в
+    // «работает» почти сразу, а не ждать обычные 15 секунд.
+    refetchInterval: (query) => {
+      const data = query.state.data
+      const starting = !!data && data.enabled && data.state === 'stopped'
+      return starting ? 1500 : 15_000
+    },
   })
 
   if (isPending || !status) return <p className="text-sm text-muted">Загрузка…</p>
@@ -412,7 +310,6 @@ export default function Bot() {
           <BotPlans />
           <BotPromo />
           <BotReferral />
-          <EmojiCard status={status} />
           <SettingsCard status={status} />
         </>
       )}

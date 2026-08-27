@@ -161,6 +161,7 @@ async def set_token(
     await db.flush()
 
     if row.enabled:
+        await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
         await bus.publish(bus.CMD_START)
     return _status(row)
 
@@ -178,6 +179,7 @@ async def start_bot(
     row.enabled = True
     _audit(db, admin, "bot.start", request)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_START)
     return _status(row)
 
@@ -189,6 +191,7 @@ async def stop_bot(admin: CurrentAdmin, db: DbSession, request: Request) -> BotS
     row.state = BotState.STOPPED
     _audit(db, admin, "bot.stop", request)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_STOP)
     return _status(row)
 
@@ -220,6 +223,7 @@ async def save_settings(
         setattr(row, field, value)
     _audit(db, admin, "bot.settings", request)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return _status(row)
 
@@ -256,6 +260,7 @@ async def set_emoji_mode(
         row.premium_emoji = data.premium_emoji
         _audit(db, admin, "bot.emoji", request, mode="plain")
         await db.flush()
+        await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
         await bus.publish(bus.CMD_RELOAD)
         return EmojiModeOut(
             ok=True, message="Включены обычные эмодзи", status=_status(row)
@@ -301,6 +306,7 @@ async def set_emoji_mode(
     row.premium_checked_at = datetime.now(UTC)
     _audit(db, admin, "bot.emoji", request, mode="premium")
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return EmojiModeOut(
         ok=True, message="Премиум-эмодзи включены", status=_status(row)
@@ -371,6 +377,7 @@ async def create_plan_category(
     db.add(row)
     _audit(db, admin, "bot.plan_category.create", request, title=data.title)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return PlanCategoryOut(id=row.id, title=row.title, sort_order=row.sort_order)
 
@@ -390,6 +397,7 @@ async def update_plan_category(
     row.sort_order = data.sort_order
     _audit(db, admin, "bot.plan_category.update", request, category_id=category_id)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return PlanCategoryOut(id=row.id, title=row.title, sort_order=row.sort_order)
 
@@ -405,6 +413,7 @@ async def delete_plan_category(
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
     _audit(db, admin, "bot.plan_category.delete", request, category_id=category_id)
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
 
 
@@ -433,6 +442,7 @@ async def create_plan(
     db.add(plan)
     _audit(db, admin, "bot.plan.create", request, title=data.title)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return _plan_out(plan)
 
@@ -461,6 +471,7 @@ async def update_plan(
 
     _audit(db, admin, "bot.plan.update", request, plan_id=plan_id)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return _plan_out(plan)
 
@@ -473,6 +484,7 @@ async def delete_plan(
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Тариф не найден")
     _audit(db, admin, "bot.plan.delete", request, plan_id=plan_id)
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
 
 
@@ -506,5 +518,6 @@ async def save_node_alerts(
     row.node_alerts_chat_id = data.chat_id
     _audit(db, admin, "bot.node_alerts", request)
     await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return _status(row)

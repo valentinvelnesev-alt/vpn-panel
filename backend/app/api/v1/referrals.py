@@ -70,6 +70,7 @@ async def save_settings(
     )
     from shared import bus
 
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return await get_settings(admin, db)
 
