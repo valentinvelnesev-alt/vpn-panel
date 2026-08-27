@@ -21,12 +21,17 @@ PLATEGA_ENABLED: Final = "payment_platega_enabled"
 PLATEGA_MERCHANT_ID: Final = "payment_platega_merchant_id"
 PLATEGA_SECRET: Final = "payment_platega_secret"
 
+ROLLYPAY_ENABLED: Final = "payment_rollypay_enabled"
+ROLLYPAY_API_KEY: Final = "payment_rollypay_api_key"
+
 CRYPTOBOT_ENABLED: Final = "payment_cryptobot_enabled"
 CRYPTOBOT_TOKEN: Final = "payment_cryptobot_token"
 
 STARS_ENABLED: Final = "payment_stars_enabled"
 
-SECRET_KEYS: Final = frozenset({REMNAWAVE_TOKEN, PLATEGA_SECRET, CRYPTOBOT_TOKEN})
+SECRET_KEYS: Final = frozenset(
+    {REMNAWAVE_TOKEN, PLATEGA_SECRET, ROLLYPAY_API_KEY, CRYPTOBOT_TOKEN}
+)
 
 
 async def get(db: AsyncSession, key: str) -> str | None:

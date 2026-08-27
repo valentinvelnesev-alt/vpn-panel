@@ -13,6 +13,7 @@ from app.config import Config
 from shared.db.models import BotUser, Payment, PaymentProvider, PaymentPurpose
 from shared.payments.cryptobot import CryptoBotClient
 from shared.payments.platega import PlategaClient
+from shared.payments.rollypay import RollyPayClient
 
 
 class PaymentFlowError(Exception):
@@ -58,6 +59,18 @@ async def create_external_payment(
         )
         payment.external_id = str(result["id"])
         pay_url = result.get("redirectUrl") or result.get("url") or ""
+
+    elif provider is PaymentProvider.ROLLYPAY:
+        if not (config.rollypay_enabled and config.rollypay_api_key):
+            raise PaymentFlowError("Оплата через РоллиПей сейчас недоступна")
+        client = RollyPayClient(config.rollypay_api_key)
+        result = await client.create_payment(
+            amount_rub=amount_rub,
+            description=description,
+            order_id=str(payment.id),
+        )
+        payment.external_id = str(result.get("payment_id") or result.get("order_id"))
+        pay_url = result.get("pay_url") or ""
 
     elif provider is PaymentProvider.CRYPTOBOT:
         if not (config.cryptobot_enabled and config.cryptobot_token):

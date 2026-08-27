@@ -248,8 +248,28 @@ async def cb_plans(callback: CallbackQuery, config: Config) -> None:
         await callback.answer()
         return
 
+    categories = keyboards.plan_categories(config)
+    if categories:
+        # Больше одной категории тарифов — сперва даём выбрать категорию,
+        # чтобы длинный список не сваливался в одну простыню кнопок.
+        await callback.message.edit_text(
+            "Выберите категорию тарифа:", reply_markup=keyboards.categories_menu(config)
+        )
+    else:
+        await callback.message.edit_text(
+            t(config, texts.PLANS_HEADER), reply_markup=keyboards.plans_menu(config)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("plancat:"))
+async def cb_plan_category(callback: CallbackQuery, config: Config) -> None:
+    _, prefix, raw_category_id = callback.data.split(":", 2)
+    category_id = None if raw_category_id == "0" else int(raw_category_id)
+
     await callback.message.edit_text(
-        t(config, texts.PLANS_HEADER), reply_markup=keyboards.plans_menu(config)
+        t(config, texts.PLANS_HEADER),
+        reply_markup=keyboards.plans_menu(config, prefix=prefix, category_id=category_id),
     )
     await callback.answer()
 

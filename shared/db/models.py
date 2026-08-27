@@ -215,6 +215,23 @@ class BotConfig(Base, TimestampMixin):
     node_alerts_chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
 
 
+class PlanCategory(Base, TimestampMixin):
+    """Категория тарифов (например «VPN», «VPN + LTE») — заводится в панели.
+
+    Раньше в боте типы тарифов были константами в коде (VPN / VPN+LTE).
+    Здесь админ сам создаёт, переименовывает и удаляет любые категории —
+    бот показывает их вкладками в меню тарифов.
+    """
+
+    __tablename__ = "bot_plan_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(64), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    plans: Mapped[list["Plan"]] = relationship(back_populates="category")
+
+
 class Plan(Base, TimestampMixin):
     """Тариф в боте: срок, цена, сквады Remnawave и лимит устройств.
 
@@ -234,6 +251,13 @@ class Plan(Base, TimestampMixin):
     traffic_limit_bytes: Mapped[int] = mapped_column(
         BigInteger, default=0, nullable=False
     )
+
+    # Не обязательна: тариф без категории просто не попадает ни в одну
+    # вкладку и показывается в общем списке (для панелей с одной категорией).
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_plan_categories.id", ondelete="SET NULL"), default=None
+    )
+    category: Mapped[PlanCategory | None] = relationship(back_populates="plans")
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -348,6 +372,7 @@ class ExpiryNotification(Base):
 # ══ Монетизация ═══════════════════════════════════════════════════════
 class PaymentProvider(StrEnum):
     PLATEGA = "platega"
+    ROLLYPAY = "rollypay"
     CRYPTOBOT = "cryptobot"
     STARS = "stars"
 

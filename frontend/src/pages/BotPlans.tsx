@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
-import { panel, type Plan, type PlanInput } from '@/lib/api'
+import { panel, type Plan, type PlanCategoryInput, type PlanInput } from '@/lib/api'
 
 const EMPTY: PlanInput = {
   title: '',
@@ -11,8 +11,147 @@ const EMPTY: PlanInput = {
   squad_uuids: [],
   hwid_limit: 3,
   traffic_limit_bytes: 0,
+  category_id: null,
   is_active: true,
   sort_order: 0,
+}
+
+const EMPTY_CATEGORY: PlanCategoryInput = { title: '', sort_order: 0 }
+
+function CategoriesManager() {
+  const queryClient = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+
+  const { data: categories } = useQuery({
+    queryKey: ['plan-categories'],
+    queryFn: panel.planCategories,
+  })
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['plan-categories'] })
+    queryClient.invalidateQueries({ queryKey: ['plans'] })
+  }
+
+  const create = useMutation({
+    mutationFn: (json: PlanCategoryInput) => panel.createPlanCategory(json),
+    onSuccess: () => {
+      invalidate()
+      setAdding(false)
+      setNewTitle('')
+    },
+  })
+  const update = useMutation({
+    mutationFn: ({ id, json }: { id: number; json: PlanCategoryInput }) =>
+      panel.updatePlanCategory(id, json),
+    onSuccess: () => {
+      invalidate()
+      setEditingId(null)
+    },
+  })
+  const remove = useMutation({ mutationFn: panel.deletePlanCategory, onSuccess: invalidate })
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-medium">Категории тарифов</h2>
+          <p className="mt-1 text-sm text-muted">
+            Если категорий больше одной, бот сначала предложит выбрать
+            категорию, а затем — тариф внутри неё. Удаление категории не
+            удаляет тарифы — они просто остаются без категории.
+          </p>
+        </div>
+        <Button variant="ghost" onClick={() => setAdding(true)}>
+          <Plus className="size-4" />
+          Добавить
+        </Button>
+      </div>
+
+      {adding && (
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            create.mutate({ ...EMPTY_CATEGORY, title: newTitle })
+          }}
+        >
+          <Input
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="Например: VPN + LTE"
+            required
+            autoFocus
+          />
+          <Button type="submit" disabled={create.isPending}>
+            Сохранить
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => setAdding(false)}>
+            Отмена
+          </Button>
+        </form>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {categories?.length === 0 && !adding && (
+          <p className="text-sm text-muted">
+            Категорий нет — все тарифы показываются одним списком.
+          </p>
+        )}
+        {categories?.map((cat) =>
+          editingId === cat.id ? (
+            <form
+              key={cat.id}
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                update.mutate({ id: cat.id, json: { title: editTitle, sort_order: cat.sort_order } })
+              }}
+            >
+              <Input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                required
+                autoFocus
+              />
+              <Button type="submit" disabled={update.isPending}>
+                Сохранить
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setEditingId(null)}>
+                Отмена
+              </Button>
+            </form>
+          ) : (
+            <div
+              key={cat.id}
+              className="flex items-center justify-between gap-4 rounded-2xl border px-3 py-2"
+            >
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-left font-medium"
+                onClick={() => {
+                  setEditingId(cat.id)
+                  setEditTitle(cat.title)
+                }}
+              >
+                {cat.title}
+              </button>
+              <button
+                type="button"
+                onClick={() => remove.mutate(cat.id)}
+                className="text-muted hover:text-danger"
+                aria-label="Удалить категорию"
+              >
+                <Trash2 className="size-4" />
+              </button>
+            </div>
+          ),
+        )}
+      </div>
+    </Card>
+  )
 }
 
 function PlanForm({
@@ -29,6 +168,10 @@ function PlanForm({
   const [form, setForm] = useState(initial)
   // Сквады подтягиваем из Remnawave, чтобы не вводить UUID руками.
   const { data: squads } = useQuery({ queryKey: ['squads'], queryFn: panel.squads })
+  const { data: categories } = useQuery({
+    queryKey: ['plan-categories'],
+    queryFn: panel.planCategories,
+  })
 
   const set = <K extends keyof PlanInput>(key: K, value: PlanInput[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -77,14 +220,32 @@ function PlanForm({
         </Field>
       </div>
 
-      <Field label="Лимит устройств">
-        <Input
-          type="number"
-          min={1}
-          value={form.hwid_limit}
-          onChange={(e) => set('hwid_limit', Number(e.target.value))}
-        />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Лимит устройств">
+          <Input
+            type="number"
+            min={1}
+            value={form.hwid_limit}
+            onChange={(e) => set('hwid_limit', Number(e.target.value))}
+          />
+        </Field>
+        <Field label="Категория (необязательно)">
+          <select
+            className="h-10 w-full rounded-lg border bg-surface px-3 text-sm"
+            value={form.category_id ?? ''}
+            onChange={(e) =>
+              set('category_id', e.target.value ? Number(e.target.value) : null)
+            }
+          >
+            <option value="">Без категории</option>
+            {categories?.map((cat) => (
+              <option key={cat.id} value={cat.id}>
+                {cat.title}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
 
       <div>
         <span className="text-sm font-medium">Сквады Remnawave</span>
@@ -146,7 +307,9 @@ export default function BotPlans() {
   const stripId = ({ id: _id, ...rest }: Plan): PlanInput => rest
 
   return (
-    <Card>
+    <div className="space-y-6">
+      <CategoriesManager />
+      <Card>
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-medium">Тарифы</h2>
@@ -213,6 +376,7 @@ export default function BotPlans() {
           ),
         )}
       </div>
-    </Card>
+      </Card>
+    </div>
   )
 }

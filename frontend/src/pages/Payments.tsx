@@ -13,6 +13,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 const PROVIDER_LABEL: Record<string, string> = {
   platega: 'СБП / карта',
+  rollypay: 'СБП (резерв)',
   cryptobot: 'Криптовалюта',
   stars: 'Telegram Stars',
 }
@@ -67,6 +68,63 @@ function PlategaCard({ providers }: { providers: Providers }) {
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
+            autoComplete="off"
+          />
+        </Field>
+        <Button type="submit" disabled={save.isPending}>
+          Сохранить
+        </Button>
+      </form>
+    </Card>
+  )
+}
+
+function RollyPayCard({ providers }: { providers: Providers }) {
+  const queryClient = useQueryClient()
+  const [enabled, setEnabled] = useState(providers.rollypay_enabled)
+  const [apiKey, setApiKey] = useState('')
+
+  const save = useMutation({
+    mutationFn: () => panel.saveRollyPay({ enabled, api_key: apiKey }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['providers'], data)
+      setApiKey('')
+    },
+  })
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h2 className="font-medium">СБП, резервный способ (RollyPay)</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          Включено
+        </label>
+      </div>
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save.mutate()
+        }}
+      >
+        <Field
+          label="API-ключ кассы"
+          hint={
+            providers.rollypay_api_key_masked
+              ? `Сохранён: ${providers.rollypay_api_key_masked}. Пусто — не менять.`
+              : undefined
+          }
+        >
+          <Input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
             autoComplete="off"
           />
         </Field>
@@ -215,6 +273,7 @@ export default function Payments() {
   return (
     <div className="max-w-3xl space-y-6">
       <PlategaCard providers={providers} />
+      <RollyPayCard providers={providers} />
       <CryptoBotCard providers={providers} />
       <StarsCard providers={providers} />
       <PaymentsLog />

@@ -206,6 +206,7 @@ export interface PlanInput {
   squad_uuids: string[]
   hwid_limit: number
   traffic_limit_bytes: number
+  category_id: number | null
   is_active: boolean
   sort_order: number
 }
@@ -214,10 +215,21 @@ export interface Plan extends PlanInput {
   id: number
 }
 
+export interface PlanCategoryInput {
+  title: string
+  sort_order: number
+}
+
+export interface PlanCategory extends PlanCategoryInput {
+  id: number
+}
+
 export interface Providers {
   platega_enabled: boolean
   platega_merchant_id: string | null
   platega_secret_masked: string | null
+  rollypay_enabled: boolean
+  rollypay_api_key_masked: string | null
   cryptobot_enabled: boolean
   cryptobot_token_masked: string | null
   stars_enabled: boolean
@@ -374,9 +386,19 @@ export const panel = {
   deletePlan: (id: number) => api<void>(`/bot/plans/${id}`, { method: 'DELETE' }),
   squads: () => api<{ uuid: string; name: string }[]>('/bot/squads'),
 
+  planCategories: () => api<PlanCategory[]>('/bot/plan-categories'),
+  createPlanCategory: (json: PlanCategoryInput) =>
+    api<PlanCategory>('/bot/plan-categories', { method: 'POST', json }),
+  updatePlanCategory: (id: number, json: PlanCategoryInput) =>
+    api<PlanCategory>(`/bot/plan-categories/${id}`, { method: 'PUT', json }),
+  deletePlanCategory: (id: number) =>
+    api<void>(`/bot/plan-categories/${id}`, { method: 'DELETE' }),
+
   providers: () => api<Providers>('/payments/providers'),
   savePlatega: (json: { enabled: boolean; merchant_id: string; secret: string }) =>
     api<Providers>('/payments/providers/platega', { method: 'PUT', json }),
+  saveRollyPay: (json: { enabled: boolean; api_key: string }) =>
+    api<Providers>('/payments/providers/rollypay', { method: 'PUT', json }),
   saveCryptoBot: (json: { enabled: boolean; token: string }) =>
     api<Providers>('/payments/providers/cryptobot', { method: 'PUT', json }),
   saveStars: (json: { enabled: boolean }) =>

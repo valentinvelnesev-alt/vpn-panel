@@ -17,6 +17,8 @@ class ProvidersOut(BaseModel):
     platega_enabled: bool
     platega_merchant_id: str | None
     platega_secret_masked: str | None
+    rollypay_enabled: bool
+    rollypay_api_key_masked: str | None
     cryptobot_enabled: bool
     cryptobot_token_masked: str | None
     stars_enabled: bool
@@ -29,6 +31,8 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         cfg.PLATEGA_ENABLED,
         cfg.PLATEGA_MERCHANT_ID,
         cfg.PLATEGA_SECRET,
+        cfg.ROLLYPAY_ENABLED,
+        cfg.ROLLYPAY_API_KEY,
         cfg.CRYPTOBOT_ENABLED,
         cfg.CRYPTOBOT_TOKEN,
         cfg.STARS_ENABLED,
@@ -38,6 +42,10 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         platega_merchant_id=values[cfg.PLATEGA_MERCHANT_ID],
         platega_secret_masked=mask(values[cfg.PLATEGA_SECRET])
         if values[cfg.PLATEGA_SECRET]
+        else None,
+        rollypay_enabled=values[cfg.ROLLYPAY_ENABLED] == "true",
+        rollypay_api_key_masked=mask(values[cfg.ROLLYPAY_API_KEY])
+        if values[cfg.ROLLYPAY_API_KEY]
         else None,
         cryptobot_enabled=values[cfg.CRYPTOBOT_ENABLED] == "true",
         cryptobot_token_masked=mask(values[cfg.CRYPTOBOT_TOKEN])
@@ -66,6 +74,33 @@ async def save_platega(
         AuditLog(
             admin_id=admin.id,
             action="payments.platega",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    from shared import bus
+
+    await bus.publish(bus.CMD_RELOAD)
+    return await get_providers(admin, db)
+
+
+class RollyPayIn(BaseModel):
+    enabled: bool
+    # Пусто = оставить прежний ключ — так же, как секреты остальных провайдеров.
+    api_key: str = Field(default="", max_length=256)
+
+
+@router.put("/providers/rollypay", response_model=ProvidersOut)
+async def save_rollypay(
+    data: RollyPayIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> ProvidersOut:
+    await cfg.set_(db, cfg.ROLLYPAY_ENABLED, "true" if data.enabled else "false")
+    if data.api_key:
+        await cfg.set_(db, cfg.ROLLYPAY_API_KEY, data.api_key)
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="payments.rollypay",
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
         )
