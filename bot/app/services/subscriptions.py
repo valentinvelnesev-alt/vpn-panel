@@ -5,6 +5,7 @@
 """
 
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Config, PlanView
 from app.services import referral
 from app.services.notify import send as notify_send
-from shared.db.models import BotUser, Purchase
+from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
 
 log = logging.getLogger("bot.subscriptions")
@@ -48,6 +49,41 @@ async def get_or_create_user(
 def _username_for(telegram_id: int) -> str:
     # Имя в Remnawave должно быть стабильным и уникальным — берём telegram_id.
     return f"tg_{telegram_id}"
+
+
+def _new_key_username(telegram_id: int) -> str:
+    # Для дополнительных ключей нужна ГЛОБАЛЬНО уникальная строка — иначе
+    # второй ключ того же пользователя столкнётся по username с первым.
+    return f"tg_{telegram_id}_{secrets.token_hex(3)}"
+
+
+async def _mirror_subscription(
+    db: AsyncSession,
+    user: BotUser,
+    *,
+    remnawave_id: int,
+    username: str,
+    subscription_url: str | None,
+    expire_at: datetime | None,
+    plan_id: int | None,
+) -> BotSubscription:
+    """Заводит или обновляет строку `bot_subscriptions` для основной
+    подписки пользователя (той, что также лежит в BotUser.remnawave_uuid).
+
+    Нужно, чтобы «Мои подписки» показывал основной ключ наравне с
+    дополнительными, купленными через `create_subscription`."""
+    row = await db.scalar(
+        select(BotSubscription).where(BotSubscription.remnawave_id == remnawave_id)
+    )
+    if row is None:
+        row = BotSubscription(user_id=user.id, remnawave_id=remnawave_id, username=username)
+        db.add(row)
+    row.subscription_url = subscription_url
+    row.expire_at = expire_at
+    if plan_id is not None:
+        row.plan_id = plan_id
+    await db.flush()
+    return row
 
 
 async def grant(
@@ -99,10 +135,21 @@ async def grant(
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 
+    mirrored = await _mirror_subscription(
+        db,
+        user,
+        remnawave_id=remote.id,
+        username=remote.username,
+        subscription_url=user.subscription_url,
+        expire_at=user.expire_at,
+        plan_id=plan_id,
+    )
+
     db.add(
         Purchase(
             user_id=user.id,
             plan_id=plan_id,
+            subscription_id=mirrored.id,
             days=days,
             amount_kopeks=amount_kopeks,
             source=source,
@@ -170,9 +217,20 @@ async def grant_bonus_days(
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 
+    mirrored = await _mirror_subscription(
+        db,
+        user,
+        remnawave_id=remote.id,
+        username=remote.username,
+        subscription_url=user.subscription_url,
+        expire_at=user.expire_at,
+        plan_id=None,
+    )
+
     db.add(
         Purchase(
             user_id=user.id,
+            subscription_id=mirrored.id,
             days=days,
             source=source,
             expire_at=user.expire_at,
@@ -197,6 +255,129 @@ async def grant_plan(
         plan_id=plan.id,
         amount_kopeks=plan.price_kopeks,
     )
+
+
+async def list_subscriptions(db: AsyncSession, user: BotUser) -> list[BotSubscription]:
+    """Все ключи пользователя, новые сверху — экран «Мои подписки»."""
+    rows = await db.scalars(
+        select(BotSubscription)
+        .where(BotSubscription.user_id == user.id)
+        .order_by(BotSubscription.created_at.desc())
+    )
+    return list(rows)
+
+
+async def create_subscription(
+    db: AsyncSession, config: Config, user: BotUser, plan: PlanView, *, source: str
+) -> BotSubscription:
+    """Покупка тарифа как в исходном боте: КАЖДАЯ покупка заводит новый
+    независимый ключ (свой аккаунт Remnawave), а не продлевает старый.
+
+    Первый ключ пользователя дополнительно становится «основным»
+    (BotUser.remnawave_uuid/expire_at) — на нём по-прежнему держатся
+    триал-гейт, автопродление и напоминания об истечении, рассчитанные на
+    единственную подписку. Второй и последующие ключи существуют только
+    как отдельные строки `bot_subscriptions`."""
+    expire_at = datetime.now(UTC) + timedelta(days=plan.days)
+
+    client = client_for(config)
+    try:
+        remote = await client.create_user(
+            username=_new_key_username(user.telegram_id),
+            expire_at=expire_at,
+            internal_squad_uuids=plan.squad_uuids,
+            telegram_id=user.telegram_id,
+            hwid_device_limit=plan.hwid_limit,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            description=f"Выдано ботом: {source}",
+        )
+    finally:
+        await client.aclose()
+
+    subscription = BotSubscription(
+        user_id=user.id,
+        remnawave_id=remote.id,
+        username=remote.username,
+        subscription_url=remote.subscription_url,
+        expire_at=remote.expire_at or expire_at,
+        plan_id=plan.id,
+    )
+    db.add(subscription)
+    await db.flush()
+
+    is_first_ever = user.remnawave_uuid is None
+    if is_first_ever:
+        user.remnawave_uuid = str(remote.id)
+        user.subscription_url = remote.subscription_url
+        user.expire_at = subscription.expire_at
+
+    db.add(
+        Purchase(
+            user_id=user.id,
+            plan_id=plan.id,
+            subscription_id=subscription.id,
+            days=plan.days,
+            amount_kopeks=plan.price_kopeks,
+            source=source,
+            expire_at=subscription.expire_at,
+        )
+    )
+    log.info(
+        "Создан новый ключ: tg=%s тариф=%s источник=%s", user.telegram_id, plan.title, source
+    )
+    return subscription
+
+
+async def extend_subscription(
+    db: AsyncSession, config: Config, subscription: BotSubscription, plan: PlanView
+) -> BotSubscription:
+    """Продление КОНКРЕТНОГО ключа — из экрана «Мои подписки» → ключ →
+    «Продлить». В отличие от `create_subscription`, не заводит новый
+    аккаунт Remnawave, а расширяет срок действия существующего."""
+    now = datetime.now(UTC)
+    current = subscription.expire_at
+    if current is not None and current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    base = current if current and current > now else now
+    expire_at = base + timedelta(days=plan.days)
+
+    client = client_for(config)
+    try:
+        remote = await client.update_user(
+            subscription.remnawave_id,
+            expireAt=expire_at.isoformat(),
+            status="ACTIVE",
+            activeInternalSquads=plan.squad_uuids,
+            hwidDeviceLimit=plan.hwid_limit,
+        )
+    finally:
+        await client.aclose()
+
+    subscription.subscription_url = remote.subscription_url
+    subscription.expire_at = remote.expire_at or expire_at
+    subscription.plan_id = plan.id
+
+    user = await db.get(BotUser, subscription.user_id)
+    if user is not None and user.remnawave_uuid == str(subscription.remnawave_id):
+        # Это основной ключ пользователя — держим зеркало в актуальном виде.
+        user.subscription_url = subscription.subscription_url
+        user.expire_at = subscription.expire_at
+
+    db.add(
+        Purchase(
+            user_id=subscription.user_id,
+            plan_id=plan.id,
+            subscription_id=subscription.id,
+            days=plan.days,
+            amount_kopeks=plan.price_kopeks,
+            source="renewal",
+            expire_at=subscription.expire_at,
+        )
+    )
+    log.info(
+        "Продлён ключ #%s: тариф=%s до %s", subscription.id, plan.title, subscription.expire_at
+    )
+    return subscription
 
 
 async def after_paid_purchase(

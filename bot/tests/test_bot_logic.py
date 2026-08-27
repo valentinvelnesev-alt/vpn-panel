@@ -13,7 +13,7 @@ from shared.db.base import Base
 from shared.db.models import BotUser, EmojiMode, ExpiryNotification, Purchase
 
 REMOTE_USER = {
-    "uuid": "rw-1",
+    "id": 1,
     "username": "tg_777",
     "status": "ACTIVE",
     "trafficLimitBytes": 0,
@@ -149,7 +149,7 @@ async def test_trial_creates_remote_user_and_marks_used(db, config) -> None:
     await db.commit()
 
     assert user.trial_used is True
-    assert user.remnawave_uuid == "rw-1"
+    assert user.remnawave_uuid == "1"
     assert user.subscription_url == "https://sub.example/xyz"
     assert subs.is_active(user)
 
@@ -165,7 +165,7 @@ async def test_purchase_extends_existing_subscription(db, config) -> None:
     """Продление считается от даты окончания, а не от «сегодня»."""
     config, calls = config
     user = await subs.get_or_create_user(db, 777)
-    user.remnawave_uuid = "rw-1"
+    user.remnawave_uuid = "1"
     user.expire_at = datetime.now(UTC) + timedelta(days=10)
     await db.flush()
 
@@ -182,7 +182,7 @@ async def test_purchase_extends_existing_subscription(db, config) -> None:
 async def test_expired_subscription_restarts_from_now(db, config) -> None:
     config, calls = config
     user = await subs.get_or_create_user(db, 777)
-    user.remnawave_uuid = "rw-1"
+    user.remnawave_uuid = "1"
     user.expire_at = datetime.now(UTC) - timedelta(days=100)
     await db.flush()
 

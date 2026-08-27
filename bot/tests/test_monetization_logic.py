@@ -20,7 +20,7 @@ from shared.db.models import (
 )
 
 REMOTE_USER = {
-    "uuid": "rw-1",
+    "id": 1,
     "username": "tg_777",
     "status": "ACTIVE",
     "trafficLimitBytes": 0,
@@ -246,7 +246,7 @@ async def test_apply_referral_reward_grants_days_to_referrer(db, config) -> None
     assert result is not None
     updated_referrer, days = result
     assert days == config.referral_reward_days
-    assert updated_referrer.remnawave_uuid == "rw-1"  # аккаунт создан бонусом
+    assert updated_referrer.remnawave_uuid == "1"  # аккаунт создан бонусом
     assert subs.is_active(updated_referrer)
 
 
@@ -296,7 +296,7 @@ async def test_grant_bonus_days_preserves_existing_squads(db, config, monkeypatc
     monkeypatch.setattr(rw.RemnawaveClient, "__init__", patched)
 
     user = await subs.get_or_create_user(db, 1)
-    user.remnawave_uuid = "rw-1"
+    user.remnawave_uuid = "1"
     user.expire_at = datetime.now(UTC) + timedelta(days=10)
     await db.flush()
 

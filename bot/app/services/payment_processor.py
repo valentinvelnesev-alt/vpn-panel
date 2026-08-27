@@ -18,6 +18,7 @@ from app.services import subscriptions as subs
 from app.services import wallet
 from app.services.notify import send
 from shared.db.models import (
+    BotSubscription,
     BotUser,
     Payment,
     PaymentPurpose,
@@ -68,12 +69,27 @@ async def handle(payment_id: int) -> None:
                 log.error("У платежа %s не найден тариф %s", payment_id, payment.plan_id)
                 return
             plan = config_module.plan_view(plan_row)
-            user = await subs.grant_plan(db, config, user, plan, source=payment.provider)
+            if payment.subscription_id is not None:
+                subscription = await db.get(BotSubscription, payment.subscription_id)
+                if subscription is None or subscription.user_id != user.id:
+                    log.error(
+                        "У платежа %s не найден ключ %s", payment_id, payment.subscription_id
+                    )
+                    return
+                subscription = await subs.extend_subscription(db, config, subscription, plan)
+                until = subscription.expire_at
+            else:
+                # Обычная покупка тарифа — как в исходном боте, заводит
+                # НОВЫЙ независимый ключ, а не продлевает существующий.
+                subscription = await subs.create_subscription(
+                    db, config, user, plan, source=payment.provider
+                )
+                until = subscription.expire_at
             text = texts.render(
                 "{@check} Оплата получена, подписка продлена до {until}",
                 config.emoji_mode,
                 config.premium_emoji,
-                until=user.expire_at.strftime("%d.%m.%Y") if user.expire_at else "—",
+                until=until.strftime("%d.%m.%Y") if until else "—",
             )
             commissions = await subs.after_paid_purchase(
                 db, config, user, payment.amount_kopeks, plan_title=plan.title

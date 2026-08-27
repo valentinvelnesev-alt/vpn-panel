@@ -1,8 +1,11 @@
-"""Админ-панель прямо в Telegram: команда /admin со статистикой.
+"""Админ-панель прямо в Telegram: команда /admin со статистикой, рассылкой
+и промокодами.
 
-Отдельно от веб-панели — быстрый обзор с телефона, без захода в браузер.
-Управление тарифами, промокодами и рассылками остаётся в веб-панели: не
-дублируем одну и ту же логику в двух местах, только читаем те же таблицы.
+Быстрые действия с телефона, без захода в браузер — но пишут в те же самые
+таблицы (`bot_promo_codes`, `broadcasts`), что и веб-панель, и рассылку
+по-прежнему отправляет воркер бота (см. app/workers/broadcast.py) по
+событию из шины. Тарифы и полноценное редактирование промокодов/рассылок
+(фото, кнопки) остаются в веб-панели — она удобнее для этого на клавиатуре.
 
 Кто видит /admin определяется списком `admin_telegram_ids` в настройках
 бота (вкладка «Бот» в панели) — это не то же самое, что администраторы
@@ -12,14 +15,19 @@
 from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config
+from app.states import AdminStates
+from shared import bus
 from shared.db.models import (
     Broadcast,
+    BroadcastSegment,
+    BroadcastStatus,
     BotUser,
     ExpiryNotification,
     Payment,
@@ -40,6 +48,20 @@ def _is_admin(config: Config, telegram_id: int) -> bool:
     return telegram_id in config.admin_telegram_ids
 
 
+def _admin_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+            [
+                InlineKeyboardButton(text="🎟 Создать промокод", callback_data="admin_promo_create"),
+                InlineKeyboardButton(text="📋 Промокоды", callback_data="admin_promo_list"),
+            ],
+            [InlineKeyboardButton(text="Закрыть", callback_data="admin_close")],
+        ]
+    )
+
+
 def _fmt_rub(kopeks: int) -> str:
     return f"{kopeks / 100:,.2f}".replace(",", " ") + " ₽"
 
@@ -57,7 +79,7 @@ def _stats_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="👥 Рефералы", callback_data="admin_stats_referrals")],
             [InlineKeyboardButton(text="📢 Рассылки", callback_data="admin_stats_broadcasts:0")],
             [InlineKeyboardButton(text="🔔 Уведомления", callback_data="admin_stats_notifications")],
-            [InlineKeyboardButton(text="Закрыть", callback_data="admin_close")],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data="admin_close_to_panel")],
         ]
     )
 
@@ -67,13 +89,24 @@ async def cmd_admin(message: Message, config: Config) -> None:
     if not _is_admin(config, message.from_user.id):
         return  # молча игнорируем — не выдаём, что команда вообще существует
     await message.answer(
-        "🛠 <b>Админ-панель</b>\n\nВыберите раздел:", reply_markup=_stats_menu_keyboard()
+        "🛠 <b>Админ-панель</b>\n\nВыберите действие:", reply_markup=_admin_menu_keyboard()
     )
 
 
 @router.callback_query(F.data == "admin_close")
-async def cb_admin_close(callback: CallbackQuery) -> None:
+async def cb_admin_close(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await callback.message.delete()
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_close_to_panel")
+async def cb_admin_close_to_panel(callback: CallbackQuery, config: Config) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+    await callback.message.edit_text(
+        "🛠 <b>Админ-панель</b>\n\nВыберите действие:", reply_markup=_admin_menu_keyboard()
+    )
     await callback.answer()
 
 
@@ -338,4 +371,217 @@ async def cb_admin_broadcasts(callback: CallbackQuery, config: Config) -> None:
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+# ── Рассылка (быстрый вариант: текст без фото/кнопок — для них веб-панель) ─
+_SEGMENT_LABEL = {
+    BroadcastSegment.ALL: "Всем пользователям",
+    BroadcastSegment.ACTIVE: "С активной подпиской",
+    BroadcastSegment.EXPIRED: "С истёкшей подпиской",
+    BroadcastSegment.NO_PURCHASE: "Без единой покупки",
+}
+
+
+def _cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="admin_close_to_panel")]]
+    )
+
+
+@router.callback_query(F.data == "admin_broadcast")
+async def cb_admin_broadcast(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+    await state.set_state(AdminStates.broadcast_text)
+    await callback.message.edit_text(
+        "📢 Введите текст рассылки (можно с HTML-разметкой):",
+        reply_markup=_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminStates.broadcast_text))
+async def on_broadcast_text(message: Message, state: FSMContext, config: Config) -> None:
+    if not _is_admin(config, message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст не может быть пустым. Введите текст рассылки:")
+        return
+
+    await state.update_data(text=text)
+    await state.set_state(AdminStates.broadcast_segment)
+
+    builder = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, callback_data=f"admin_bcseg:{seg.value}")]
+            for seg, label in _SEGMENT_LABEL.items()
+        ]
+        + [[InlineKeyboardButton(text="Отмена", callback_data="admin_close_to_panel")]]
+    )
+    await message.answer("Кому отправить?", reply_markup=builder)
+
+
+@router.callback_query(F.data.startswith("admin_bcseg:"))
+async def cb_broadcast_segment(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+
+    segment = BroadcastSegment(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    text = data.get("text", "")
+    await state.update_data(segment=segment.value)
+    await state.set_state(AdminStates.broadcast_confirm)
+
+    preview = text if len(text) <= 500 else text[:500] + "…"
+    confirm_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Отправить", callback_data="admin_bcconfirm")],
+            [InlineKeyboardButton(text="Отмена", callback_data="admin_close_to_panel")],
+        ]
+    )
+    await callback.message.edit_text(
+        f"Проверьте рассылку:\n\nСегмент: <b>{_SEGMENT_LABEL[segment]}</b>\n\n{preview}",
+        reply_markup=confirm_kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_bcconfirm")
+async def cb_broadcast_confirm(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+
+    data = await state.get_data()
+    text = data.get("text", "")
+    segment = BroadcastSegment(data.get("segment", BroadcastSegment.ALL.value))
+    await state.clear()
+
+    now = datetime.now(UTC)
+    async with session() as db:
+        broadcast = Broadcast(
+            text=text,
+            buttons=[],
+            segment=segment,
+            status=BroadcastStatus.SCHEDULED,
+            scheduled_at=now,
+            created_at=now,
+        )
+        db.add(broadcast)
+
+    # Публикуем ПОСЛЕ выхода из `session()` — она уже закоммитила транзакцию
+    # (см. shared/db/session.py), иначе воркер может прочитать ещё не
+    # сохранённую запись (та же гонка, что чинили в веб-панели).
+    await bus.publish(bus.EVENT_BROADCAST_READY)
+
+    await callback.message.edit_text(
+        "✅ Рассылка запущена — воркер отправит её в ближайшие секунды.",
+        reply_markup=_admin_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+# ── Промокоды ─────────────────────────────────────────────────────────
+@router.callback_query(F.data == "admin_promo_create")
+async def cb_admin_promo_create(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+    await state.set_state(AdminStates.promo_code)
+    await callback.message.edit_text(
+        "🎟 Введите код промокода (латиница и цифры, например SUMMER25):",
+        reply_markup=_cancel_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminStates.promo_code))
+async def on_promo_code_input(message: Message, state: FSMContext, config: Config) -> None:
+    if not _is_admin(config, message.from_user.id):
+        return
+    code = (message.text or "").strip().upper()
+    if not code or not all(c.isalnum() or c in "_-" for c in code):
+        await message.answer("Только буквы, цифры, «_» и «-». Введите код ещё раз:")
+        return
+
+    async with session() as db:
+        exists = await db.scalar(select(PromoCode).where(PromoCode.code == code))
+    if exists:
+        await message.answer("Такой промокод уже существует. Введите другой код:")
+        return
+
+    await state.update_data(code=code)
+    await state.set_state(AdminStates.promo_bonus_days)
+    await message.answer("Сколько бонусных дней даёт промокод? (0 — только скидка)")
+
+
+@router.message(StateFilter(AdminStates.promo_bonus_days))
+async def on_promo_bonus_days(message: Message, state: FSMContext, config: Config) -> None:
+    if not _is_admin(config, message.from_user.id):
+        return
+    try:
+        days = int((message.text or "").strip())
+        assert 0 <= days <= 3650
+    except (ValueError, AssertionError):
+        await message.answer("Введите целое число дней от 0 до 3650:")
+        return
+
+    await state.update_data(bonus_days=days)
+    await state.set_state(AdminStates.promo_discount_percent)
+    await message.answer("Скидка на покупку тарифа, в процентах? (0 — без скидки)")
+
+
+@router.message(StateFilter(AdminStates.promo_discount_percent))
+async def on_promo_discount_percent(message: Message, state: FSMContext, config: Config) -> None:
+    if not _is_admin(config, message.from_user.id):
+        return
+    try:
+        percent = int((message.text or "").strip())
+        assert 0 <= percent <= 100
+    except (ValueError, AssertionError):
+        await message.answer("Введите целое число процентов от 0 до 100:")
+        return
+
+    data = await state.get_data()
+    code = data["code"]
+    bonus_days = data["bonus_days"]
+    await state.clear()
+
+    if bonus_days == 0 and percent == 0:
+        await message.answer(
+            "У промокода должны быть дни или скидка — иначе он ничего не даёт. "
+            "Начните заново через /admin.",
+        )
+        return
+
+    async with session() as db:
+        db.add(PromoCode(code=code, bonus_days=bonus_days, discount_percent=percent))
+
+    await message.answer(
+        f"✅ Промокод <b>{code}</b> создан: {bonus_days} дн., скидка {percent}%.",
+        reply_markup=_admin_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "admin_promo_list")
+async def cb_admin_promo_list(callback: CallbackQuery, config: Config) -> None:
+    if not _is_admin(config, callback.from_user.id):
+        return await callback.answer()
+
+    async with session() as db:
+        rows = (
+            await db.scalars(select(PromoCode).order_by(PromoCode.created_at.desc()).limit(20))
+        ).all()
+
+    if not rows:
+        text = "📋 <b>Промокоды</b>\n\nПока не создано ни одного."
+    else:
+        lines = []
+        for p in rows:
+            status_icon = "✅" if p.is_active else "⛔️"
+            limit = f"{p.uses_count}/{p.max_uses}" if p.max_uses else f"{p.uses_count}/∞"
+            lines.append(f"{status_icon} <code>{p.code}</code> — {p.bonus_days} дн., {p.discount_percent}% · {limit}")
+        text = "📋 <b>Промокоды</b>\n\n" + "\n".join(lines)
+
+    await callback.message.edit_text(text, reply_markup=_back_keyboard("admin_close_to_panel"))
     await callback.answer()
