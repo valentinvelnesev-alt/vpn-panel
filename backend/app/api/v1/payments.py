@@ -80,6 +80,7 @@ async def save_platega(
     )
     from shared import bus
 
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return await get_providers(admin, db)
 
@@ -107,6 +108,7 @@ async def save_rollypay(
     )
     from shared import bus
 
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return await get_providers(admin, db)
 
@@ -133,6 +135,7 @@ async def save_cryptobot(
     )
     from shared import bus
 
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return await get_providers(admin, db)
 
@@ -156,6 +159,7 @@ async def save_stars(
     )
     from shared import bus
 
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return await get_providers(admin, db)
 
