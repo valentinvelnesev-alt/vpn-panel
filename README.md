@@ -49,7 +49,7 @@ Telegram-бота и хотите управлять всем этим из од
 Ubuntu 22.04+ с правами root:
 
 ```bash
-git clone https://github.com/dlcloudpro/vpn-panel vpn-panel && cd vpn-panel
+git clone https://github.com/valentinvelnesev-alt/vpn-panel vpn-panel && cd vpn-panel
 sudo bash install.sh
 ```
 
@@ -112,4 +112,4 @@ docker compose down             # остановка
 ```
 
 Файл `.env` содержит пароль БД и ключ шифрования — без него данные
-восстановить нельзя. Храните копию отдельно от сервера.# reactus-panel
+восстановить нельзя. Храните копию отдельно от сервера.
