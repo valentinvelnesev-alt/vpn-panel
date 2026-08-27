@@ -14,7 +14,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config
-from shared.db.models import BotUser, ReferralReward
+from app.services import wallet
+from shared.db.models import BotUser, ReferralReward, WalletTxType
 
 log = logging.getLogger("bot.referral")
 
@@ -84,3 +85,49 @@ async def reward_if_first_purchase(
 
     user.referral_reward_paid = True
     return reward
+
+
+async def award_commission(
+    db: AsyncSession, config: Config, user: BotUser, amount_kopeks: int
+) -> list[tuple[BotUser, int]]:
+    """Денежная 2-уровневая комиссия на баланс — с КАЖДОЙ оплаты (не только
+    первой). Уровень 1 — прямой пригласивший, уровень 2 — тот, кто пригласил
+    его. Комиссия не начисляется за пополнение баланса, только за тариф —
+    вызывающий код решает это, передавая сюда только суммы покупок.
+
+    Возвращает список (реферер, начислено копеек) — для уведомлений в боте.
+    """
+    if not config.referral_commission_enabled or amount_kopeks <= 0:
+        return []
+    if user.referred_by_id is None:
+        return []
+
+    awarded: list[tuple[BotUser, int]] = []
+
+    level1 = await db.get(BotUser, user.referred_by_id)
+    if level1 is not None and config.referral_level1_percent > 0:
+        share = amount_kopeks * config.referral_level1_percent // 100
+        if share > 0:
+            await wallet.credit(
+                db,
+                level1,
+                share,
+                WalletTxType.REFERRAL_REWARD,
+                description=f"Комиссия 1 уровня с покупки {user.telegram_id}",
+            )
+            awarded.append((level1, share))
+
+        if level1.referred_by_id is not None and config.referral_level2_percent > 0:
+            level2 = await db.get(BotUser, level1.referred_by_id)
+            share2 = amount_kopeks * config.referral_level2_percent // 100
+            if level2 is not None and share2 > 0:
+                await wallet.credit(
+                    db,
+                    level2,
+                    share2,
+                    WalletTxType.REFERRAL_REWARD,
+                    description=f"Комиссия 2 уровня с покупки {user.telegram_id}",
+                )
+                awarded.append((level2, share2))
+
+    return awarded

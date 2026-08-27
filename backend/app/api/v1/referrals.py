@@ -15,6 +15,12 @@ class ReferralSettingsIn(BaseModel):
     referral_reward_days: int = Field(default=3, ge=0, le=365)
     referral_bonus_days: int = Field(default=1, ge=0, le=365)
 
+    # Денежная 2-уровневая комиссия на баланс — начисляется с каждой оплаты
+    # приглашённого, независимо от разового бонуса в днях выше.
+    referral_commission_enabled: bool = False
+    referral_level1_percent: int = Field(default=25, ge=0, le=100)
+    referral_level2_percent: int = Field(default=5, ge=0, le=100)
+
 
 class ReferralSettingsOut(ReferralSettingsIn):
     pass
@@ -36,6 +42,9 @@ async def get_settings(admin: CurrentAdmin, db: DbSession) -> ReferralSettingsOu
         referral_enabled=row.referral_enabled,
         referral_reward_days=row.referral_reward_days,
         referral_bonus_days=row.referral_bonus_days,
+        referral_commission_enabled=row.referral_commission_enabled,
+        referral_level1_percent=row.referral_level1_percent,
+        referral_level2_percent=row.referral_level2_percent,
     )
 
 
@@ -47,6 +56,9 @@ async def save_settings(
     row.referral_enabled = data.referral_enabled
     row.referral_reward_days = data.referral_reward_days
     row.referral_bonus_days = data.referral_bonus_days
+    row.referral_commission_enabled = data.referral_commission_enabled
+    row.referral_level1_percent = data.referral_level1_percent
+    row.referral_level2_percent = data.referral_level2_percent
 
     db.add(
         AuditLog(

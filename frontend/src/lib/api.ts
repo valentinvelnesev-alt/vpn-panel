@@ -180,6 +180,7 @@ export interface BotSettings {
   trial_days: number
   trial_squad_uuids: string[]
   trial_hwid_limit: number
+  purchase_notify_chat_id: number | null
 }
 
 export interface BotStatus extends BotSettings {
@@ -194,6 +195,8 @@ export interface BotStatus extends BotSettings {
   emoji_mode: 'plain' | 'premium'
   premium_available: boolean
   premium_emoji: Record<string, string>
+  node_alerts_enabled: boolean
+  node_alerts_chat_id: number | null
 }
 
 export interface PlanInput {
@@ -250,6 +253,9 @@ export interface ReferralSettings {
   referral_enabled: boolean
   referral_reward_days: number
   referral_bonus_days: number
+  referral_commission_enabled: boolean
+  referral_level1_percent: number
+  referral_level2_percent: number
 }
 
 export interface ReferralStats {
