@@ -562,9 +562,9 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
 async def cb_devices(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        uuid = user.remnawave_uuid
+        rw_id = int(user.remnawave_uuid) if user.remnawave_uuid else None
 
-    if not uuid:
+    if not rw_id:
         await callback.message.edit_text(
             t(config, texts.DEVICES_EMPTY), reply_markup=keyboards.back_to_menu()
         )
@@ -574,7 +574,7 @@ async def cb_devices(callback: CallbackQuery, config: Config) -> None:
     try:
         client = subs.client_for(config)
         try:
-            devices = await client.get_devices(uuid)
+            devices = await client.get_devices(rw_id)
         finally:
             await client.aclose()
     except RemnawaveError:
@@ -601,13 +601,13 @@ async def cb_devices(callback: CallbackQuery, config: Config) -> None:
 async def cb_devices_reset(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        uuid = user.remnawave_uuid
+        rw_id = int(user.remnawave_uuid) if user.remnawave_uuid else None
 
-    if uuid:
+    if rw_id:
         try:
             client = subs.client_for(config)
             try:
-                await client.delete_all_devices(uuid)
+                await client.delete_all_devices(rw_id)
             finally:
                 await client.aclose()
         except RemnawaveError:
