@@ -28,7 +28,14 @@ from app.services import payment_flow, promo as promo_service, referral, stars
 from app.services import subscriptions as subs
 from app.services import wallet
 from app.states import UserStates
-from shared.db.models import BotUser, PaymentProvider, PaymentPurpose, WalletTxType
+from shared.db.models import (
+    BotSubscription,
+    BotUser,
+    PaymentProvider,
+    PaymentPurpose,
+    Purchase,
+    WalletTxType,
+)
 from shared.db.session import session
 from shared.remnawave import RemnawaveClient, RemnawaveError
 
@@ -115,13 +122,10 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
             first_name=target.from_user.first_name,
             language_code=target.from_user.language_code,
         )
-        active = subs.is_active(user)
         trial_available = config.trial_enabled and not user.trial_used
 
     text = t(config, config.welcome_text or texts.WELCOME_DEFAULT, brand=config.brand)
-    markup = keyboards.main_menu(
-        config, has_subscription=active, trial_available=trial_available
-    )
+    markup = keyboards.main_menu(config, trial_available=trial_available)
 
     if isinstance(target, CallbackQuery):
         await message.edit_text(text, reply_markup=markup)
@@ -279,7 +283,12 @@ async def cb_plan_category(callback: CallbackQuery, config: Config) -> None:
 
 
 def _any_provider_enabled(config: Config) -> bool:
-    return config.platega_enabled or config.cryptobot_enabled or config.stars_enabled
+    return (
+        config.platega_enabled
+        or config.rollypay_enabled
+        or config.cryptobot_enabled
+        or config.stars_enabled
+    )
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -365,24 +374,47 @@ async def _show_topup_providers(callback: CallbackQuery, config: Config, amount:
 
 
 # ── Оплата ────────────────────────────────────────────────────────────
+async def _resolve_pay_target(
+    db, config: Config, user: BotUser, purpose: str, target: str
+):
+    """Разбирает `target` из callback_data в (plan, subscription|None, amount, описание).
+
+    purpose == "plan"  → target = "{plan_id}" — покупка НОВОГО ключа.
+    purpose == "renew" → target = "{subscription_id}-{plan_id}" — продление
+    конкретного существующего ключа (проверяем, что он принадлежит user).
+    purpose == "topup" → target = сумма в рублях, тариф/ключ не участвуют.
+    """
+    if purpose == "topup":
+        return None, None, round(float(target) * 100), f"Пополнение баланса на {target} ₽"
+
+    if purpose == "renew":
+        sub_id_str, _, plan_id_str = target.partition("-")
+        plan = next((p for p in config.plans if p.id == int(plan_id_str)), None)
+        if plan is None:
+            return None, None, 0, ""
+        subscription = await db.get(BotSubscription, int(sub_id_str))
+        if subscription is None or subscription.user_id != user.id:
+            return None, None, 0, ""
+        return plan, subscription, plan.price_kopeks, f"Продление «{plan.title}»"
+
+    plan = next((p for p in config.plans if p.id == int(target)), None)
+    if plan is None:
+        return None, None, 0, ""
+    return plan, None, plan.price_kopeks, f"Оплата тарифа «{plan.title}»"
+
+
 @router.callback_query(F.data.startswith("pay:"))
 async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
     _, purpose, provider_name, target = callback.data.split(":", 3)
 
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-
-        if purpose == "topup":
-            amount_kopeks = round(float(target) * 100)
-            plan = None
-            description = f"Пополнение баланса на {target} ₽"
-        else:
-            plan = next((p for p in config.plans if p.id == int(target)), None)
-            if plan is None:
-                await callback.answer("Тариф недоступен", show_alert=True)
-                return
-            amount_kopeks = plan.price_kopeks
-            description = f"Оплата тарифа «{plan.title}»"
+        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
+            db, config, user, purpose, target
+        )
+        if purpose != "topup" and plan is None:
+            await callback.answer("Тариф или ключ недоступен", show_alert=True)
+            return
 
         if provider_name == "wallet":
             if plan is None:
@@ -397,7 +429,16 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             except wallet.InsufficientFunds as exc:
                 await callback.answer(str(exc), show_alert=True)
                 return
-            user = await subs.grant_plan(db, config, user, plan, source="wallet")
+
+            if subscription is not None:
+                subscription = await subs.extend_subscription(db, config, subscription, plan)
+                until = subscription.expire_at
+            else:
+                subscription = await subs.create_subscription(
+                    db, config, user, plan, source="wallet"
+                )
+                until = subscription.expire_at
+
             reward = await subs.apply_referral_reward(db, config, user)
             commissions = await subs.after_paid_purchase(
                 db, config, user, amount_kopeks, plan_title=plan.title
@@ -406,7 +447,7 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
                 t(
                     config,
                     "{@check} Оплачено с баланса. Подписка продлена до {until}",
-                    until=_date(user.expire_at),
+                    until=_date(until),
                 ),
                 reply_markup=keyboards.back_to_menu(),
             )
@@ -453,6 +494,7 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
                 amount_kopeks=amount_kopeks,
                 provider=provider,
                 plan_id=plan.id if plan else None,
+                subscription_id=subscription.id if subscription else None,
                 description=description,
             )
         except payment_flow.PaymentFlowError as exc:
@@ -503,25 +545,38 @@ async def on_successful_payment(message: Message, config: Config) -> None:
             )
             return
 
-        plan = next((p for p in config.plans if p.id == int(payload["target"])), None)
+        plan, subscription, amount_kopeks, _ = await _resolve_pay_target(
+            db, config, user, payload["purpose"], payload["target"]
+        )
         if plan is None:
             await message.answer(t(config, texts.ERROR_GENERIC))
             return
 
-        user = await subs.grant_plan(db, config, user, plan, source="stars")
+        if subscription is not None:
+            subscription = await subs.extend_subscription(db, config, subscription, plan)
+            until = subscription.expire_at
+        else:
+            subscription = await subs.create_subscription(db, config, user, plan, source="stars")
+            until = subscription.expire_at
+
         reward = await subs.apply_referral_reward(db, config, user)
         commissions = await subs.after_paid_purchase(
-            db, config, user, plan.price_kopeks, plan_title=plan.title
+            db, config, user, amount_kopeks, plan_title=plan.title
         )
 
     await message.answer(
-        t(config, "{@check} Оплата получена, подписка продлена до {until}", until=_date(user.expire_at))
+        t(config, "{@check} Оплата получена, подписка продлена до {until}", until=_date(until))
     )
     if reward is not None:
         referrer, days = reward
         await message.bot.send_message(
             referrer.telegram_id,
             t(config, "{@gift} Ваш друг оплатил подписку — начислено {days} дн.", days=days),
+        )
+    for referrer, share in commissions:
+        await message.bot.send_message(
+            referrer.telegram_id,
+            t(config, "{@gift} Начислена реферальная комиссия: {amount} ₽", amount=f"{share / 100:.2f}"),
         )
     for referrer, share in commissions:
         await message.bot.send_message(
@@ -602,23 +657,130 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
 
 
 # ── Устройства ────────────────────────────────────────────────────────
-@router.callback_query(F.data == "devices")
-async def cb_devices(callback: CallbackQuery, config: Config) -> None:
+# ── Мои подписки (несколько ключей на пользователя) ────────────────────
+@router.callback_query(F.data == "my_subscriptions")
+async def cb_my_subscriptions(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        rw_id = int(user.remnawave_uuid) if user.remnawave_uuid else None
+        rows = await subs.list_subscriptions(db, user)
 
-    if not rw_id:
+    text = "🔑 <b>Мои подписки</b>" if rows else t(config, texts.SUBSCRIPTION_NONE)
+    await callback.message.edit_text(text, reply_markup=keyboards.subscriptions_menu(rows))
+    await callback.answer()
+
+
+async def _get_own_subscription(db, telegram_id: int, subscription_id: int):
+    user = await subs.get_or_create_user(db, telegram_id)
+    subscription = await db.get(BotSubscription, subscription_id)
+    if subscription is None or subscription.user_id != user.id:
+        return None
+    return subscription
+
+
+@router.callback_query(F.data.startswith("viewsub:"))
+async def cb_view_subscription(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+
+    if subscription is None:
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+
+    text = (
+        f"🔑 <b>{subscription.username}</b>\n\n"
+        f"Действует до: <b>{_date(subscription.expire_at)}</b> "
+        f"({_left(subscription.expire_at)})"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboards.subscription_detail_menu(
+            subscription_id, has_url=bool(subscription.subscription_url)
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("sublink:"))
+async def cb_subscription_link(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+
+    if subscription is None or not subscription.subscription_url:
+        await callback.answer("Ссылка недоступна", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"🔗 Ссылка для подключения:\n\n<code>{subscription.subscription_url}</code>",
+        reply_markup=keyboards.subscription_detail_menu(subscription_id, has_url=True),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("renewsub:"))
+async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+    if subscription is None:
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+
+    if not config.plans:
         await callback.message.edit_text(
-            t(config, texts.DEVICES_EMPTY), reply_markup=keyboards.back_to_menu()
+            t(config, texts.NO_PLANS), reply_markup=keyboards.back_to_menu()
         )
         await callback.answer()
+        return
+
+    prefix = f"renewbuy-{subscription_id}"
+    categories = keyboards.plan_categories(config)
+    if categories:
+        await callback.message.edit_text(
+            "Выберите категорию тарифа:", reply_markup=keyboards.categories_menu(config, prefix=prefix)
+        )
+    else:
+        await callback.message.edit_text(
+            t(config, texts.PLANS_HEADER), reply_markup=keyboards.plans_menu(config, prefix=prefix)
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("renewbuy-"))
+async def cb_renew_pick_plan(callback: CallbackQuery, config: Config) -> None:
+    prefix, plan_id_str = callback.data.split(":", 1)
+    subscription_id = int(prefix.removeprefix("renewbuy-"))
+    plan = next((p for p in config.plans if p.id == int(plan_id_str)), None)
+    if plan is None:
+        await callback.answer("Тариф больше не доступен", show_alert=True)
+        return
+    if not _any_provider_enabled(config):
+        await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
+        return
+
+    target = f"{subscription_id}-{plan.id}"
+    price = f"{plan.price_rub:.0f} ₽".replace(".0", "")
+    await callback.message.edit_text(
+        t(config, "{@card} <b>{title}</b> — {price}\n\nСпособ оплаты:", title=plan.title, price=price),
+        reply_markup=keyboards.providers_menu(config, purpose="renew", target=target),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subdevices:"))
+async def cb_subscription_devices(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+    if subscription is None:
+        await callback.answer("Ключ не найден", show_alert=True)
         return
 
     try:
         client = subs.client_for(config)
         try:
-            devices = await client.get_devices(rw_id)
+            devices = await client.get_devices(subscription.remnawave_id)
         finally:
             await client.aclose()
     except RemnawaveError:
@@ -636,30 +798,83 @@ async def cb_devices(callback: CallbackQuery, config: Config) -> None:
         text = t(config, texts.DEVICES_EMPTY)
 
     await callback.message.edit_text(
-        text, reply_markup=keyboards.devices_menu(devices, bool(devices))
+        text,
+        reply_markup=keyboards.devices_menu(devices, bool(devices), subscription_id=subscription_id),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data == "devices_reset")
-async def cb_devices_reset(callback: CallbackQuery, config: Config) -> None:
+@router.callback_query(F.data.startswith("devicesreset:"))
+async def cb_subscription_devices_reset(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
     async with session() as db:
-        user = await subs.get_or_create_user(db, callback.from_user.id)
-        rw_id = int(user.remnawave_uuid) if user.remnawave_uuid else None
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+    if subscription is None:
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
 
-    if rw_id:
+    try:
+        client = subs.client_for(config)
         try:
-            client = subs.client_for(config)
-            try:
-                await client.delete_all_devices(rw_id)
-            finally:
-                await client.aclose()
-        except RemnawaveError:
-            await callback.answer("Не удалось сбросить", show_alert=True)
-            return
+            await client.delete_all_devices(subscription.remnawave_id)
+        finally:
+            await client.aclose()
+    except RemnawaveError:
+        await callback.answer("Не удалось сбросить", show_alert=True)
+        return
 
     await callback.answer("Устройства отвязаны", show_alert=True)
-    await cb_devices(callback, config)
+    await cb_subscription_devices(callback, config)
+
+
+# ── Профиль ───────────────────────────────────────────────────────────
+@router.callback_query(F.data == "profile")
+async def cb_profile(callback: CallbackQuery, config: Config) -> None:
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        w = await wallet.get_or_create(db, user)
+        balance = w.balance_kopeks
+
+    text = (
+        f"👤 <b>Ваш профиль</b>\n\n"
+        f"ID: <code>{callback.from_user.id}</code>\n"
+        f"💰 Баланс: <b>{balance / 100:.2f} ₽</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=keyboards.profile_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "wallet_topup")
+async def cb_wallet_topup(callback: CallbackQuery, config: Config) -> None:
+    await callback.message.edit_text(
+        t(config, "{@card} Выберите сумму пополнения:"), reply_markup=keyboards.wallet_menu()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "purchase_history")
+async def cb_purchase_history(callback: CallbackQuery, config: Config) -> None:
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        rows = await db.scalars(
+            select(Purchase)
+            .where(Purchase.user_id == user.id)
+            .order_by(Purchase.created_at.desc())
+            .limit(15)
+        )
+        rows = list(rows)
+
+    if not rows:
+        text = "🧾 <b>История покупок</b>\n\nПока пусто."
+    else:
+        lines = [
+            f"• {p.created_at.strftime('%d.%m.%Y')} — {p.source} — {p.amount_kopeks / 100:.2f} ₽"
+            for p in rows
+        ]
+        text = "🧾 <b>История покупок</b>\n\n" + "\n".join(lines)
+
+    await callback.message.edit_text(text, reply_markup=keyboards.back_to_menu())
+    await callback.answer()
 
 
 # ── Блокировка бота пользователем ─────────────────────────────────────

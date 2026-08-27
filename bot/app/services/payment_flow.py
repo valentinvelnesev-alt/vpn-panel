@@ -29,9 +29,13 @@ async def create_external_payment(
     amount_kopeks: int,
     provider: PaymentProvider,
     plan_id: int | None = None,
+    subscription_id: int | None = None,
     description: str,
 ) -> tuple[Payment, str]:
-    """Возвращает (запись платежа, ссылка на оплату)."""
+    """Возвращает (запись платежа, ссылка на оплату).
+
+    subscription_id задан только для продления конкретного существующего
+    ключа — покупка нового ключа его не передаёт."""
     payment = Payment(
         user_id=user.id,
         provider=provider,
@@ -41,6 +45,7 @@ async def create_external_payment(
         amount_kopeks=amount_kopeks,
         purpose=purpose,
         plan_id=plan_id,
+        subscription_id=subscription_id,
     )
     db.add(payment)
     await db.flush()  # нужен payment.id для order_id

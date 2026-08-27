@@ -324,9 +324,51 @@ class BotUser(Base, TimestampMixin):
     auto_renew_plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
     )
+    # Какую подписку продлевать автоплатежом. NULL — «основную» (первую
+    # выданную), см. BotSubscription.
+    auto_renew_subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
+    )
 
     purchases: Mapped[list["Purchase"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
+    )
+    subscriptions: Mapped[list["BotSubscription"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="BotSubscription.user_id",
+    )
+
+
+class BotSubscription(Base, TimestampMixin):
+    """Один купленный «ключ» — отдельный аккаунт Remnawave.
+
+    У пользователя бота может быть несколько таких записей: как в исходном
+    боте, каждая покупка тарифа заводит новый независимый ключ вместо
+    продления единственного. Первая подписка при этом продолжает
+    зеркалироваться в `BotUser.remnawave_uuid/expire_at` — этим полям
+    по-прежнему верят триал, автопродление и напоминания об истечении,
+    рассчитанные на «основную» подписку.
+    """
+
+    __tablename__ = "bot_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    remnawave_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    subscription_url: Mapped[str | None] = mapped_column(Text, default=None)
+    expire_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
+    )
+
+    user: Mapped[BotUser] = relationship(
+        back_populates="subscriptions", foreign_keys=[user_id]
     )
 
 
@@ -341,6 +383,9 @@ class Purchase(Base, TimestampMixin):
     )
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
+    )
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
     )
 
     days: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -455,6 +500,12 @@ class Payment(Base, TimestampMixin):
     purpose: Mapped[PaymentPurpose] = mapped_column(String(16), nullable=False)
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
+    )
+    # Заполнено только для продления конкретного ключа (не для новой
+    # покупки и не для пополнения баланса): какую именно подписку продлить,
+    # когда придёт подтверждение оплаты.
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
     )
     status: Mapped[PaymentStatus] = mapped_column(
         String(16), default=PaymentStatus.PENDING, nullable=False
