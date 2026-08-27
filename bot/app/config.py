@@ -67,6 +67,12 @@ class Config:
     referral_reward_days: int = 3
     referral_bonus_days: int = 1
 
+    referral_commission_enabled: bool = False
+    referral_level1_percent: int = 25
+    referral_level2_percent: int = 5
+
+    purchase_notify_chat_id: int | None = None
+
     plans: list[PlanView] = field(default_factory=list)
 
     remnawave_url: str | None = None
@@ -136,6 +142,10 @@ async def load(db: AsyncSession) -> Config:
         referral_enabled=row.referral_enabled,
         referral_reward_days=row.referral_reward_days,
         referral_bonus_days=row.referral_bonus_days,
+        referral_commission_enabled=row.referral_commission_enabled,
+        referral_level1_percent=row.referral_level1_percent,
+        referral_level2_percent=row.referral_level2_percent,
+        purchase_notify_chat_id=row.purchase_notify_chat_id,
         plans=[plan_view(p) for p in plans],
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),

@@ -362,6 +362,26 @@ function SettingsCard({ status }: { status: BotStatus }) {
           </div>
         )}
 
+        <hr />
+
+        <Field label="Чат для уведомлений о продажах (ID, необязательно)">
+          <Input
+            type="number"
+            placeholder="например -1001234567890"
+            value={form.purchase_notify_chat_id ?? ''}
+            onChange={(e) =>
+              set(
+                'purchase_notify_chat_id',
+                e.target.value ? Number(e.target.value) : null
+              )
+            }
+          />
+        </Field>
+        <p className="text-sm text-muted">
+          Бот должен быть добавлен в этот чат/группу. Оставьте пустым, чтобы
+          отключить уведомления о продажах.
+        </p>
+
         {save.isSuccess && <p className="text-sm text-success">Сохранено</p>}
         {save.isError && (
           <p className="text-sm text-danger">{(save.error as Error).message}</p>

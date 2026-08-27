@@ -76,6 +76,46 @@ export default function BotReferral() {
           </div>
         )}
 
+        <div className="border-t pt-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={form.referral_commission_enabled}
+              onChange={(e) => set('referral_commission_enabled', e.target.checked)}
+            />
+            Денежная комиссия на баланс (с каждой оплаты, 2 уровня)
+          </label>
+          <p className="mt-1 text-sm text-muted">
+            Работает независимо от бонуса в днях выше: с каждой оплаты
+            приглашённого на баланс пригласившего зачисляется процент, и ещё
+            меньший процент — тому, кто пригласил самого пригласившего.
+          </p>
+
+          {form.referral_commission_enabled && (
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label="Процент 1 уровня (прямой реферал)">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.referral_level1_percent}
+                  onChange={(e) => set('referral_level1_percent', Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Процент 2 уровня (реферал реферала)">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.referral_level2_percent}
+                  onChange={(e) => set('referral_level2_percent', Number(e.target.value))}
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+
         {save.isSuccess && <p className="text-sm text-success">Сохранено</p>}
         <Button type="submit" disabled={save.isPending}>
           Сохранить

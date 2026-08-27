@@ -189,6 +189,25 @@ class BotConfig(Base, TimestampMixin):
         Integer, default=1, nullable=False
     )
 
+    # Денежная 2-уровневая комиссия рефереру на баланс — начисляется с
+    # КАЖДОЙ оплаты приглашённого (в отличие от разового referral_reward_days
+    # за первую покупку). Уровень 2 — комиссия того, кто пригласил реферера.
+    referral_commission_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    referral_level1_percent: Mapped[int] = mapped_column(
+        Integer, default=25, nullable=False
+    )
+    referral_level2_percent: Mapped[int] = mapped_column(
+        Integer, default=5, nullable=False
+    )
+
+    # Уведомление о каждой продаже в отдельный чат/группу (бот должен
+    # состоять в ней участником). 0/None — уведомления отключены.
+    purchase_notify_chat_id: Mapped[int | None] = mapped_column(
+        BigInteger, default=None
+    )
+
     # Алерты о падении нод (Pro) — шлются этому чату из бота.
     node_alerts_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

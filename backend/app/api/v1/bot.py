@@ -64,6 +64,8 @@ class BotStatusOut(BaseModel):
     node_alerts_enabled: bool
     node_alerts_chat_id: int | None
 
+    purchase_notify_chat_id: int | None
+
 
 def _status(row: BotConfig) -> BotStatusOut:
     token = decrypt(row.token_encrypted) if row.token_encrypted else None
@@ -90,6 +92,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         trial_hwid_limit=row.trial_hwid_limit,
         node_alerts_enabled=row.node_alerts_enabled,
         node_alerts_chat_id=row.node_alerts_chat_id,
+        purchase_notify_chat_id=row.purchase_notify_chat_id,
     )
 
 
@@ -202,6 +205,10 @@ class BotSettingsIn(BaseModel):
     trial_days: int = Field(default=3, ge=1, le=365)
     trial_squad_uuids: list[str] = Field(default_factory=list)
     trial_hwid_limit: int = Field(default=3, ge=1, le=100)
+
+    # Уведомление о каждой продаже в чат/группу (бот должен состоять в ней).
+    # Пусто/0 — уведомления отключены.
+    purchase_notify_chat_id: int | None = None
 
 
 @router.put("/settings", response_model=BotStatusOut)

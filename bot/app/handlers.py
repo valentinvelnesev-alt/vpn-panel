@@ -375,6 +375,9 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
                 return
             user = await subs.grant_plan(db, config, user, plan, source="wallet")
             reward = await subs.apply_referral_reward(db, config, user)
+            commissions = await subs.after_paid_purchase(
+                db, config, user, amount_kopeks, plan_title=plan.title
+            )
             await callback.message.edit_text(
                 t(
                     config,
@@ -389,6 +392,15 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
                 await bot.send_message(
                     referrer.telegram_id,
                     t(config, "{@gift} Ваш друг оплатил подписку — начислено {days} дн.", days=days),
+                )
+            for referrer, share in commissions:
+                await bot.send_message(
+                    referrer.telegram_id,
+                    t(
+                        config,
+                        "{@gift} Начислена реферальная комиссия: {amount} ₽",
+                        amount=f"{share / 100:.2f}",
+                    ),
                 )
             return
 
@@ -474,6 +486,9 @@ async def on_successful_payment(message: Message, config: Config) -> None:
 
         user = await subs.grant_plan(db, config, user, plan, source="stars")
         reward = await subs.apply_referral_reward(db, config, user)
+        commissions = await subs.after_paid_purchase(
+            db, config, user, plan.price_kopeks, plan_title=plan.title
+        )
 
     await message.answer(
         t(config, "{@check} Оплата получена, подписка продлена до {until}", until=_date(user.expire_at))
@@ -483,6 +498,11 @@ async def on_successful_payment(message: Message, config: Config) -> None:
         await message.bot.send_message(
             referrer.telegram_id,
             t(config, "{@gift} Ваш друг оплатил подписку — начислено {days} дн.", days=days),
+        )
+    for referrer, share in commissions:
+        await message.bot.send_message(
+            referrer.telegram_id,
+            t(config, "{@gift} Начислена реферальная комиссия: {amount} ₽", amount=f"{share / 100:.2f}"),
         )
 
 

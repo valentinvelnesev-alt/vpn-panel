@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config, PlanView
 from app.services import referral
+from app.services.notify import send as notify_send
 from shared.db.models import BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
 
@@ -196,6 +197,37 @@ async def grant_plan(
         plan_id=plan.id,
         amount_kopeks=plan.price_kopeks,
     )
+
+
+async def after_paid_purchase(
+    db: AsyncSession,
+    config: Config,
+    user: BotUser,
+    amount_kopeks: int,
+    *,
+    plan_title: str = "тариф",
+) -> list[tuple[BotUser, int]]:
+    """Единая точка после успешной оплаты тарифа (не пополнения баланса):
+    начисляет денежную комиссию рефереру(ам) и шлёт уведомление о продаже
+    в чат, если он настроен в панели. Не трогает разовый бонус в днях —
+    им по-прежнему занимается `apply_referral_reward`.
+
+    Возвращает список (реферер, начислено копеек) — вызывающий код сам
+    решает, как и когда доставить эти уведомления (сразу или пачкой).
+    """
+    awarded = await referral.award_commission(db, config, user, amount_kopeks)
+
+    if config.purchase_notify_chat_id and config.token:
+        uname = f"@{user.username}" if user.username else str(user.telegram_id)
+        text = (
+            f"💰 Новая продажа\n"
+            f"Пользователь: {uname}\n"
+            f"Тариф: {plan_title}\n"
+            f"Сумма: {amount_kopeks / 100:.2f} ₽"
+        )
+        await notify_send(config.token, config.purchase_notify_chat_id, text)
+
+    return awarded
 
 
 async def apply_referral_reward(

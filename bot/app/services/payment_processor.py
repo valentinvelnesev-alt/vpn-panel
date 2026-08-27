@@ -75,6 +75,20 @@ async def handle(payment_id: int) -> None:
                 config.premium_emoji,
                 until=user.expire_at.strftime("%d.%m.%Y") if user.expire_at else "—",
             )
+            commissions = await subs.after_paid_purchase(
+                db, config, user, payment.amount_kopeks, plan_title=plan.title
+            )
+            for referrer, share in commissions:
+                await send(
+                    config.token,
+                    referrer.telegram_id,
+                    texts.render(
+                        "{@gift} Начислена реферальная комиссия: {amount} ₽",
+                        config.emoji_mode,
+                        config.premium_emoji,
+                        amount=f"{share / 100:.2f}",
+                    ),
+                )
 
         await send(config.token, user.telegram_id, text)
 
