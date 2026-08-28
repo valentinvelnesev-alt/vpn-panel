@@ -134,13 +134,27 @@ def subscription_detail_menu(subscription_id: int, *, has_url: bool) -> InlineKe
     return builder.as_markup()
 
 
-def profile_menu() -> InlineKeyboardMarkup:
+def profile_menu(config: Config) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 Пополнить баланс", callback_data="wallet_topup")
     builder.button(text="💳 Купить подписку", callback_data="plans")
     builder.button(text="🧾 История покупок", callback_data="purchase_history")
+
+    legal_row = 0
+    if config.privacy_policy_url:
+        builder.button(text="Политика конфиденциальности", url=config.privacy_policy_url)
+        legal_row += 1
+    if config.terms_url:
+        builder.button(text="Пользовательское соглашение", url=config.terms_url)
+        legal_row += 1
+
     builder.button(text="‹ Назад", callback_data="menu")
-    builder.adjust(1)
+
+    rows = [1, 1, 1]
+    if legal_row:
+        rows.append(legal_row)
+    rows.append(1)
+    builder.adjust(*rows)
     return builder.as_markup()
 
 

@@ -840,7 +840,7 @@ async def cb_profile(callback: CallbackQuery, config: Config) -> None:
         f"ID: <code>{callback.from_user.id}</code>\n"
         f"💰 Баланс: <b>{balance / 100:.2f} ₽</b>"
     )
-    await callback.message.edit_text(text, reply_markup=keyboards.profile_menu())
+    await callback.message.edit_text(text, reply_markup=keyboards.profile_menu(config))
     await callback.answer()
 
 

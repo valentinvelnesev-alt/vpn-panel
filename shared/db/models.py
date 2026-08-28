@@ -215,6 +215,11 @@ class BotConfig(Base, TimestampMixin):
         JSON, default=list, nullable=False
     )
 
+    # Ссылки на юридические документы — кнопками в профиле бота. Пусто —
+    # кнопка просто не показывается, ничего не ломается.
+    privacy_policy_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    terms_url: Mapped[str | None] = mapped_column(String(512), default=None)
+
     # Алерты о падении нод (Pro) — шлются этому чату из бота.
     node_alerts_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

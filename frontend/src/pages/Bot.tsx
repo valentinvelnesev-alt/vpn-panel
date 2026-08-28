@@ -294,6 +294,26 @@ function SettingsCard({ status }: { status: BotStatus }) {
           />
         </Field>
 
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Ссылка на политику конфиденциальности">
+            <Input
+              value={form.privacy_policy_url ?? ''}
+              onChange={(e) => set('privacy_policy_url', e.target.value || null)}
+              placeholder="https://..."
+            />
+          </Field>
+          <Field label="Ссылка на пользовательское соглашение">
+            <Input
+              value={form.terms_url ?? ''}
+              onChange={(e) => set('terms_url', e.target.value || null)}
+              placeholder="https://..."
+            />
+          </Field>
+        </div>
+        <p className="text-sm text-muted">
+          Если заполнены — в профиле бота появятся кнопки со ссылками. Пусто — кнопок не будет.
+        </p>
+
         {save.isSuccess && <p className="text-sm text-success">Сохранено</p>}
         {save.isError && (
           <p className="text-sm text-danger">{(save.error as Error).message}</p>

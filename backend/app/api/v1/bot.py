@@ -66,6 +66,8 @@ class BotStatusOut(BaseModel):
 
     purchase_notify_chat_id: int | None
     admin_telegram_ids: list[int]
+    privacy_policy_url: str | None
+    terms_url: str | None
 
 
 def _status(row: BotConfig) -> BotStatusOut:
@@ -95,6 +97,8 @@ def _status(row: BotConfig) -> BotStatusOut:
         node_alerts_chat_id=row.node_alerts_chat_id,
         purchase_notify_chat_id=row.purchase_notify_chat_id,
         admin_telegram_ids=list(row.admin_telegram_ids or []),
+        privacy_policy_url=row.privacy_policy_url,
+        terms_url=row.terms_url,
     )
 
 
@@ -217,6 +221,10 @@ class BotSettingsIn(BaseModel):
 
     # Telegram ID, которым в самом боте открывается команда /admin.
     admin_telegram_ids: list[int] = Field(default_factory=list)
+
+    # Кнопки в профиле бота — пусто, если ссылка не задана.
+    privacy_policy_url: str | None = Field(default=None, max_length=512)
+    terms_url: str | None = Field(default=None, max_length=512)
 
 
 @router.put("/settings", response_model=BotStatusOut)
