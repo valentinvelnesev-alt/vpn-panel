@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     deploy_mode: Literal["domain", "ip"] = "ip"
     panel_domain: str = ""
     panel_port: int = 4250
+    # Публичный адрес сервера в режиме ip — записывается install.sh при
+    # установке. Без него ссылки на фото рассылок собирались бы на
+    # "localhost", который для серверов Telegram означает их же собственную
+    # машину — фото просто не скачивалось бы.
+    panel_public_url: str = ""
 
     database_url: str
     redis_url: str = "redis://redis:6379/0"
@@ -43,8 +48,13 @@ class Settings(BaseSettings):
 
     @property
     def public_url(self) -> str:
+        if self.panel_public_url:
+            return self.panel_public_url.rstrip("/")
         if self.deploy_mode == "domain":
             return f"https://{self.panel_domain}"
+        # Резервный вариант для старых установок без PANEL_PUBLIC_URL в
+        # .env — сгенерированная ссылка на фото не будет работать, пока
+        # его не пропишут (см. update.sh, который делает это сам).
         return f"http://localhost:{self.panel_port}"
 
 
