@@ -58,11 +58,41 @@ echo
 git pull origin main
 ok "Код обновлён"
 
+# ── 3.5 Публичный адрес сервера (для ссылок на фото рассылок) ─────────
+# Установки до этого обновления не сохраняли его в .env — бэкенд считал
+# публичным адресом "localhost", и фото в рассылках не скачивались
+# серверами Telegram. Дополняем .env, если поля ещё нет.
+if ! grep -qE "^PANEL_PUBLIC_URL=" .env; then
+    if [ "$DEPLOY_MODE" = "domain" ]; then
+        PUBLIC_URL="https://$(get PANEL_DOMAIN)"
+    else
+        SERVER_IP=$(curl -fsS --max-time 10 https://api.ipify.org || hostname -I | awk '{print $1}')
+        PUBLIC_URL="http://${SERVER_IP}:$(get PANEL_PORT)"
+    fi
+    echo "PANEL_PUBLIC_URL=$PUBLIC_URL" >> .env
+    ok "Добавлен публичный адрес в .env: $PUBLIC_URL"
+fi
+
 # ── 4. Пересобираем и перезапускаем ──────────────────────────────────
 inf "  Обновляю образы и перезапускаю контейнеры…"
 $COMPOSE pull
 $COMPOSE up -d --build
 ok "Контейнеры перезапущены"
+
+# ── 4.5 Применяем миграции базы данных ────────────────────────────────
+inf "  Жду готовности panel-api перед миграциями…"
+for i in $(seq 1 30); do
+    if $COMPOSE exec -T panel-api true 2>/dev/null; then
+        break
+    fi
+    sleep 2
+done
+if $COMPOSE exec -T panel-api alembic upgrade head; then
+    ok "Миграции применены"
+else
+    c '1;33' "  ⚠ Не удалось применить миграции автоматически — выполните вручную:"
+    echo "      docker compose exec panel-api alembic upgrade head"
+fi
 
 # ── 5. Готово ─────────────────────────────────────────────────────────
 c '0;32' "

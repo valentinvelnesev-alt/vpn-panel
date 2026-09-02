@@ -160,6 +160,7 @@ function TokenCard({ status }: { status: BotStatus }) {
 function SettingsCard({ status }: { status: BotStatus }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<BotSettings>(status)
+  const { data: squads } = useQuery({ queryKey: ['squads'], queryFn: panel.squads })
 
   useEffect(() => setForm(status), [status])
 
@@ -170,6 +171,14 @@ function SettingsCard({ status }: { status: BotStatus }) {
 
   const set = <K extends keyof BotSettings>(key: K, value: BotSettings[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
+
+  const toggleTrialSquad = (uuid: string) =>
+    set(
+      'trial_squad_uuids',
+      form.trial_squad_uuids.includes(uuid)
+        ? form.trial_squad_uuids.filter((s) => s !== uuid)
+        : [...form.trial_squad_uuids, uuid],
+    )
 
   return (
     <Card>
@@ -250,6 +259,40 @@ function SettingsCard({ status }: { status: BotStatus }) {
                 onChange={(e) => set('trial_hwid_limit', Number(e.target.value))}
               />
             </Field>
+          </div>
+        )}
+
+        {form.trial_enabled && (
+          <div>
+            <span className="text-sm font-medium">Сквады Remnawave для триала</span>
+            {squads?.length ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {squads.map((squad) => (
+                  <button
+                    key={squad.uuid}
+                    type="button"
+                    onClick={() => toggleTrialSquad(squad.uuid)}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      form.trial_squad_uuids.includes(squad.uuid)
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'hover:bg-surface-hover'
+                    }`}
+                  >
+                    {squad.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted">
+                Сквады не загрузились — проверьте подключение к Remnawave.
+              </p>
+            )}
+            {form.trial_squad_uuids.length === 0 && (
+              <p className="mt-1 text-xs text-danger">
+                Не выбран ни один сквад — триал-подписки будут создаваться без доступа
+                ни к одной ноде.
+              </p>
+            )}
           </div>
         )}
 
