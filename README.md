@@ -108,8 +108,11 @@ Remnawave достаточно заменить файл и перегенери
 Если панель уже установлена, обновитесь одной командой:
 
 ```bash
-cd ~/vpn-panel && curl -fsSL https://raw.githubusercontent.com/valentinvelnesev-alt/vpn-panel/main/update.sh | bash
+cd ~/vpn-panel && curl -fsSL https://raw.githubusercontent.com/valentinvelnesev-alt/vpn-panel/main/update.sh -o update.sh && bash update.sh
 ```
+
+> [!IMPORTANT]
+> Именно «скачать, потом выполнить», а не `curl ... | bash`. Внутри скрипта есть команды `docker compose exec`, которые обращаются к тому же вводу, что и сам пайп, — при прямом пайпинге это иногда обрывает выполнение скрипта без единой ошибки, будто обновление «зависло».
 
 Скрипт автоматически создаст бэкап `.env` и базы данных, подтянет изменения и перезапустит контейнеры. После первого запуска `update.sh` останется в папке — в следующий раз достаточно `bash update.sh`.
 

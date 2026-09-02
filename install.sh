@@ -113,7 +113,7 @@ $COMPOSE up -d --build
 inf "  Жду готовности панели…"
 for i in $(seq 1 60); do
 	if $COMPOSE exec -T panel-api python -c \
-		"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health')" 2>/dev/null; then
+		"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health')" < /dev/null 2>/dev/null; then
 		ready=1; break
 	fi
 	sleep 3
@@ -122,7 +122,7 @@ done
 ok "Панель работает"
 
 # ── 6. Первый администратор ───────────────────────────────────────────
-if $COMPOSE exec -T panel-api python -m app.cli admin-exists 2>/dev/null; then
+if $COMPOSE exec -T panel-api python -m app.cli admin-exists < /dev/null 2>/dev/null; then
 	ok "Администратор уже создан"
 else
 	c '1;37' "

@@ -43,7 +43,7 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${DEPLOY_MODE}.y
 
 DB_BACKUP="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S).sql"
 inf "  Создаю дамп базы данных…"
-if $COMPOSE exec -T postgres pg_dump -U postgres vpn_panel > "$DB_BACKUP" 2>/dev/null; then
+if $COMPOSE exec -T postgres pg_dump -U postgres vpn_panel < /dev/null > "$DB_BACKUP" 2>/dev/null; then
     ok "Бэкап БД → $DB_BACKUP"
 else
     c '1;33' "  ⚠ Не удалось создать дамп БД (контейнер не запущен?), продолжаю без него"
@@ -106,12 +106,12 @@ ok "Контейнеры перезапущены"
 # ── 4.5 Применяем миграции базы данных ────────────────────────────────
 inf "  Жду готовности panel-api перед миграциями…"
 for i in $(seq 1 30); do
-    if $COMPOSE exec -T panel-api true 2>/dev/null; then
+    if $COMPOSE exec -T panel-api true < /dev/null 2>/dev/null; then
         break
     fi
     sleep 2
 done
-if $COMPOSE exec -T panel-api alembic upgrade head; then
+if $COMPOSE exec -T panel-api alembic upgrade head < /dev/null; then
     ok "Миграции применены"
 else
     c '1;33' "  ⚠ Не удалось применить миграции автоматически — выполните вручную:"
