@@ -244,7 +244,10 @@ def test_analytics_export_csv(client: TestClient) -> None:
 
 
 # ── Загрузка фото ─────────────────────────────────────────────────────
-def test_upload_photo_accepts_image(client: TestClient) -> None:
+def test_upload_photo_accepts_image(client: TestClient, tmp_path, monkeypatch) -> None:
+    from app.api.v1 import broadcasts as broadcasts_module
+
+    monkeypatch.setattr(broadcasts_module.settings, "upload_dir", str(tmp_path))
     r = client.post(
         "/api/v1/broadcasts/upload-photo",
         files={"file": ("pic.jpg", b"\xff\xd8\xff\xe0fake-jpeg", "image/jpeg")},

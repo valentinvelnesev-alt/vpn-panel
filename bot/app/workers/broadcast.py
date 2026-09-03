@@ -5,18 +5,23 @@
 после каждого сообщения отдельной короткой транзакцией, чтобы панель,
 опрашивающая БД через WebSocket, видела его в реальном времени, а не только
 после завершения всей рассылки.
+
+Возобновление: получатели идут по возрастанию id, после каждого сообщения
+сохраняются `cursor_user_id` и `heartbeat_at`. Если контейнер упал, рассылка
+остаётся в `sending` без свежего heartbeat — воркер подхватывает её и
+продолжает с курсора, не отправляя повторно тем, кто уже получил.
 """
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from shared.db.models import Broadcast, BroadcastSegment, BroadcastStatus, BotUser
 from shared.db.session import SessionLocal, session
@@ -26,23 +31,30 @@ log = logging.getLogger("bot.workers.broadcast")
 
 CHECK_INTERVAL = 10
 SEND_DELAY = 0.05  # ~20 сообщений в секунду — с запасом от лимитов Telegram
+# Рассылка в `sending` без heartbeat дольше этого считается брошенной.
+STALE_AFTER = timedelta(minutes=2)
 
 
 def _keyboard(buttons: list[dict]):
     if not buttons:
         return None
     builder = InlineKeyboardBuilder()
+    added = 0
     for button in buttons:
         text = str(button.get("text") or "").strip()
         url = str(button.get("url") or "").strip()
         if text and url:
             builder.button(text=text, url=url)
+            added += 1
+    if not added:
+        return None
     builder.adjust(1)
-    return builder.as_markup() if buttons else None
+    return builder.as_markup()
 
 
 async def _claim_due_broadcast() -> int | None:
-    """Берёт в работу одну наступившую рассылку, помечая её как sending."""
+    """Берёт в работу одну наступившую рассылку (или брошенную — для
+    возобновления), помечая её как sending."""
     now = datetime.now(UTC)
     async with session() as db:
         row = await db.scalar(
@@ -55,9 +67,24 @@ async def _claim_due_broadcast() -> int | None:
             .limit(1)
         )
         if row is None:
+            row = await db.scalar(
+                select(Broadcast)
+                .where(
+                    Broadcast.status == BroadcastStatus.SENDING,
+                    Broadcast.heartbeat_at.is_not(None),
+                    Broadcast.heartbeat_at < now - STALE_AFTER,
+                )
+                .order_by(Broadcast.started_at)
+                .limit(1)
+            )
+            if row is not None:
+                log.warning("Возобновляю брошенную рассылку %s с курсора %s", row.id, row.cursor_user_id)
+        if row is None:
             return None
         row.status = BroadcastStatus.SENDING
-        row.started_at = now
+        if row.started_at is None:
+            row.started_at = now
+        row.heartbeat_at = now
         return row.id
 
 
@@ -66,10 +93,16 @@ async def _send(broadcast_id: int, token: str) -> None:
         broadcast = await db.get(Broadcast, broadcast_id)
         if broadcast is None:
             return
-        recipients = list(
-            await db.scalars(recipients_query(BroadcastSegment(broadcast.segment)))
-        )
-        broadcast.total_recipients = len(recipients)
+        base = recipients_query(BroadcastSegment(broadcast.segment))
+        if not broadcast.total_recipients:
+            broadcast.total_recipients = (
+                await db.scalar(select(func.count()).select_from(base.subquery()))
+            ) or 0
+        cursor = broadcast.cursor_user_id
+        query = base.order_by(BotUser.id)
+        if cursor is not None:
+            query = query.where(BotUser.id > cursor)
+        recipients = list(await db.scalars(query))
         await db.commit()
 
         keyboard = _keyboard(broadcast.buttons)
@@ -80,7 +113,7 @@ async def _send(broadcast_id: int, token: str) -> None:
     try:
         for user in recipients:
             ok = False
-            for attempt in range(3):
+            for _attempt in range(3):
                 try:
                     if photo_url:
                         await bot.send_photo(
@@ -111,12 +144,14 @@ async def _send(broadcast_id: int, token: str) -> None:
 
             async with SessionLocal() as db:
                 broadcast = await db.get(Broadcast, broadcast_id)
-                if broadcast is None:
+                if broadcast is None or broadcast.status == BroadcastStatus.CANCELLED:
                     return
                 if ok:
                     broadcast.sent_count += 1
                 else:
                     broadcast.failed_count += 1
+                broadcast.cursor_user_id = user.id
+                broadcast.heartbeat_at = datetime.now(UTC)
                 await db.commit()
 
             await asyncio.sleep(SEND_DELAY)

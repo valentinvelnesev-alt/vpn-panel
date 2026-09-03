@@ -83,12 +83,15 @@ function RollyPayCard({ providers }: { providers: Providers }) {
   const queryClient = useQueryClient()
   const [enabled, setEnabled] = useState(providers.rollypay_enabled)
   const [apiKey, setApiKey] = useState('')
+  const [signingSecret, setSigningSecret] = useState('')
 
   const save = useMutation({
-    mutationFn: () => panel.saveRollyPay({ enabled, api_key: apiKey }),
+    mutationFn: () =>
+      panel.saveRollyPay({ enabled, api_key: apiKey, signing_secret: signingSecret }),
     onSuccess: (data) => {
       queryClient.setQueryData(['providers'], data)
       setApiKey('')
+      setSigningSecret('')
     },
   })
 
@@ -125,6 +128,21 @@ function RollyPayCard({ providers }: { providers: Providers }) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+          />
+        </Field>
+        <Field
+          label="Секрет подписи вебхуков (необязательно)"
+          hint={
+            providers.rollypay_signing_secret_masked
+              ? `Сохранён: ${providers.rollypay_signing_secret_masked}. Пусто — не менять. С ним колбэки без валидной подписи отбрасываются.`
+              : 'Из кабинета RollyPay. С ним колбэки без валидной подписи отбрасываются; без него оплата всё равно подтверждается перезапросом статуса.'
+          }
+        >
+          <Input
+            type="password"
+            value={signingSecret}
+            onChange={(e) => setSigningSecret(e.target.value)}
             autoComplete="off"
           />
         </Field>
