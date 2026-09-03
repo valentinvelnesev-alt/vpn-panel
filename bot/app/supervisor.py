@@ -95,6 +95,7 @@ class Supervisor:
         from app.workers.broadcast import worker as broadcast_worker
         from app.workers.expiry import worker as expiry_worker
         from app.workers.node_alerts import worker as node_alerts_worker
+        from app.workers.payment_polling import worker as payment_polling_worker
         from app.workers.payments import worker as payments_worker
 
         self._bot = bot
@@ -104,6 +105,7 @@ class Supervisor:
         self._workers = [
             asyncio.create_task(expiry_worker(bot, config)),
             asyncio.create_task(payments_worker()),
+            asyncio.create_task(payment_polling_worker()),
             asyncio.create_task(auto_renewal_worker()),
             asyncio.create_task(broadcast_worker(config.token)),
             asyncio.create_task(node_alerts_worker()),
