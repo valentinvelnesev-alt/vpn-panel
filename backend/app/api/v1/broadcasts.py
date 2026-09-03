@@ -160,6 +160,9 @@ async def create_broadcast(
     await db.flush()
 
     if send_now:
+        # Коммит до pub/sub: воркер бота читает рассылку своей сессией и
+        # без коммита не нашёл бы её (та же гонка, что у платежей).
+        await db.commit()
         await bus.publish(bus.EVENT_BROADCAST_READY)
 
     return _out(broadcast)

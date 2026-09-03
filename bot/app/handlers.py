@@ -1,38 +1,53 @@
 """Хендлеры бота.
 
-Один модуль на весь диалог — он умещается в несколько сотен строк, потому
-что тексты вынесены в texts.py, клавиатуры в keyboards.py, а выдача
-подписок в services/subscriptions.py. Разрастётся — резать по этим швам.
+Один модуль на весь диалог: тексты вынесены в texts.py, клавиатуры в
+keyboards.py, выдача подписок в services/subscriptions.py, применение
+оплат — в services/payment_processor.py.
 """
 
 import json
 import logging
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated,
+    ErrorEvent,
     LabeledPrice,
     Message,
     PreCheckoutQuery,
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 
 from app import keyboards, texts
-from app.config import Config
-from app.services import payment_check, payment_flow, promo as promo_service, referral, stars
+from app.config import Config, PlanView, discounted_kopeks, format_rub
+from app.services import (
+    payment_check,
+    payment_flow,
+    payment_processor,
+    promo as promo_service,
+    referral,
+    stars,
+)
 from app.services import subscriptions as subs
 from app.services import wallet
 from app.states import UserStates
+from app.ui import safe_edit
 from shared.db.models import (
     BotSubscription,
     BotUser,
+    Payment,
     PaymentProvider,
     PaymentPurpose,
+    PaymentStatus,
+    Plan,
     Purchase,
     WalletTxType,
 )
@@ -55,11 +70,46 @@ def build_dispatcher(*, storage: BaseStorage, config: Config) -> Dispatcher:
     admin.router._parent_router = None
     dispatcher = Dispatcher(storage=storage)
     # Конфиг кладём в контекст: хендлеры получают его аргументом и не лезут
-    # в глобальные переменные.
+    # в глобальные переменные. Супервизор подменяет его при reload.
     dispatcher["config"] = config
     dispatcher.include_router(admin.router)
     dispatcher.include_router(router)
+    dispatcher.errors.register(on_error)
     return dispatcher
+
+
+async def on_error(event: ErrorEvent) -> bool:
+    """Общий обработчик: не роняем апдейт трейсбеком на типовых ошибках
+    Telegram, а пользователю снимаем «часики» с кнопки."""
+    exc = event.exception
+    update = event.update
+    callback = update.callback_query
+    message = update.message
+
+    if isinstance(exc, TelegramForbiddenError):
+        telegram_id = (callback or message).from_user.id if (callback or message) else None
+        if telegram_id is not None:
+            async with session() as db:
+                user = await db.scalar(select(BotUser).where(BotUser.telegram_id == telegram_id))
+                if user is not None:
+                    user.has_stopped_bot = True
+        return True
+
+    if isinstance(exc, TelegramBadRequest) and "message is not modified" in str(exc):
+        if callback is not None:
+            try:
+                await callback.answer()
+            except TelegramBadRequest:
+                pass
+        return True
+
+    log.exception("Ошибка в обработчике апдейта %s", update.update_id, exc_info=exc)
+    if callback is not None:
+        try:
+            await callback.answer("Что-то пошло не так, попробуйте ещё раз", show_alert=True)
+        except TelegramBadRequest:
+            pass
+    return True
 
 
 def t(config: Config, template: str, **values: object) -> str:
@@ -95,6 +145,24 @@ def _date(value: datetime | None) -> str:
     return value.strftime("%d.%m.%Y")
 
 
+async def _user_discount(db, telegram_id: int) -> int:
+    user = await subs.get_or_create_user(db, telegram_id)
+    return user.discount_percent or 0
+
+
+async def _plan_titles(db, subscriptions: list[BotSubscription]) -> dict[int, str]:
+    """id ключа → человекочитаемое имя (название тарифа или «Пробный»)."""
+    plan_ids = {s.plan_id for s in subscriptions if s.plan_id is not None}
+    titles: dict[int, str] = {}
+    if plan_ids:
+        rows = await db.scalars(select(Plan).where(Plan.id.in_(plan_ids)))
+        titles = {p.id: p.title for p in rows}
+    return {
+        s.id: titles.get(s.plan_id, "Подписка") if s.plan_id else "Пробный период"
+        for s in subscriptions
+    }
+
+
 # ── Проверка подписки на канал ────────────────────────────────────────
 async def _channel_ok(bot: Bot, config: Config, telegram_id: int) -> bool:
     if not config.require_channel_sub or not config.channel_id:
@@ -128,14 +196,29 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
     markup = keyboards.main_menu(config, trial_available=trial_available)
 
     if isinstance(target, CallbackQuery):
-        await message.edit_text(text, reply_markup=markup)
+        await safe_edit(message, text, markup)
         await target.answer()
     else:
         await message.answer(text, reply_markup=markup)
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, config: Config, bot: Bot) -> None:
+async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContext) -> None:
+    # Любой незавершённый ввод (промокод, сумма) сбрасывается — иначе
+    # следующее сообщение пользователя ушло бы в старый сценарий.
+    await state.clear()
+
+    # Реферальная ссылка: t.me/bot?start=ref_ABC123 → payload "ref_ABC123".
+    # Привязываем ДО проверки канала: после нажатия «Я подписался» payload
+    # уже недоступен, и реферер терялся.
+    payload = (message.text or "").partition(" ")[2].strip()
+    if payload.startswith("ref_") and config.referral_visible:
+        async with session() as db:
+            user = await subs.get_or_create_user(
+                db, message.from_user.id, username=message.from_user.username
+            )
+            await referral.attach_referrer(db, config, user, payload.removeprefix("ref_"))
+
     if not await _channel_ok(bot, config, message.from_user.id):
         await message.answer(
             t(config, texts.CHANNEL_REQUIRED),
@@ -143,20 +226,12 @@ async def cmd_start(message: Message, config: Config, bot: Bot) -> None:
         )
         return
 
-    # Реферальная ссылка: t.me/bot?start=ref_ABC123 → payload "ref_ABC123".
-    payload = (message.text or "").partition(" ")[2].strip()
-    if payload.startswith("ref_") and config.referral_enabled:
-        async with session() as db:
-            user = await subs.get_or_create_user(
-                db, message.from_user.id, username=message.from_user.username
-            )
-            await referral.attach_referrer(db, config, user, payload.removeprefix("ref_"))
-
     await _show_menu(message, config)
 
 
 @router.callback_query(F.data == "menu")
-async def cb_menu(callback: CallbackQuery, config: Config) -> None:
+async def cb_menu(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
+    await state.clear()
     await _show_menu(callback, config)
 
 
@@ -205,7 +280,7 @@ async def _show_subscription(target: Message | CallbackQuery, config: Config) ->
 
     markup = keyboards.back_to_menu()
     if isinstance(target, CallbackQuery):
-        await message.edit_text(text, reply_markup=markup)
+        await safe_edit(message, text, markup)
         await target.answer()
     else:
         await message.answer(text, reply_markup=markup)
@@ -213,9 +288,12 @@ async def _show_subscription(target: Message | CallbackQuery, config: Config) ->
 
 # ── Триал ─────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "trial")
-async def cb_trial(callback: CallbackQuery, config: Config) -> None:
+async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
     if not config.trial_enabled:
         await callback.answer("Пробный период отключён", show_alert=True)
+        return
+    if not await _channel_ok(bot, config, callback.from_user.id):
+        await callback.answer("Сначала подпишитесь на канал", show_alert=True)
         return
 
     async with session() as db:
@@ -233,7 +311,8 @@ async def cb_trial(callback: CallbackQuery, config: Config) -> None:
             return
         expire_at, url = user.expire_at, user.subscription_url
 
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         t(
             config,
             texts.TRIAL_GRANTED,
@@ -241,7 +320,7 @@ async def cb_trial(callback: CallbackQuery, config: Config) -> None:
             until=_date(expire_at),
             url=url or "—",
         ),
-        reply_markup=keyboards.back_to_menu(),
+        keyboards.back_to_menu(),
     )
     await callback.answer()
 
@@ -250,24 +329,34 @@ async def cb_trial(callback: CallbackQuery, config: Config) -> None:
 @router.callback_query(F.data == "plans")
 async def cb_plans(callback: CallbackQuery, config: Config) -> None:
     if not config.plans:
-        await callback.message.edit_text(
-            t(config, texts.NO_PLANS), reply_markup=keyboards.back_to_menu()
-        )
+        await safe_edit(callback.message, t(config, texts.NO_PLANS), keyboards.back_to_menu())
         await callback.answer()
         return
+
+    async with session() as db:
+        discount = await _user_discount(db, callback.from_user.id)
 
     categories = keyboards.plan_categories(config)
     if categories:
         # Больше одной категории тарифов — сперва даём выбрать категорию,
         # чтобы длинный список не сваливался в одну простыню кнопок.
-        await callback.message.edit_text(
-            "Выберите категорию тарифа:", reply_markup=keyboards.categories_menu(config)
+        await safe_edit(
+            callback.message, "Выберите категорию тарифа:", keyboards.categories_menu(config)
         )
     else:
-        await callback.message.edit_text(
-            t(config, texts.PLANS_HEADER), reply_markup=keyboards.plans_menu(config)
+        await safe_edit(
+            callback.message,
+            _plans_header(config, discount),
+            keyboards.plans_menu(config, discount_percent=discount),
         )
     await callback.answer()
+
+
+def _plans_header(config: Config, discount: int) -> str:
+    text = t(config, texts.PLANS_HEADER)
+    if discount:
+        text += f"\n\nВаша скидка по промокоду: <b>{discount}%</b> — уже учтена в ценах."
+    return text
 
 
 @router.callback_query(F.data.startswith("plancat:"))
@@ -275,43 +364,58 @@ async def cb_plan_category(callback: CallbackQuery, config: Config) -> None:
     _, prefix, raw_category_id = callback.data.split(":", 2)
     category_id = None if raw_category_id == "0" else int(raw_category_id)
 
-    await callback.message.edit_text(
-        t(config, texts.PLANS_HEADER),
-        reply_markup=keyboards.plans_menu(config, prefix=prefix, category_id=category_id),
+    async with session() as db:
+        discount = await _user_discount(db, callback.from_user.id)
+
+    back = "menu"
+    if prefix.startswith("renewbuy-"):
+        back = f"renewsub:{prefix.removeprefix('renewbuy-')}"
+    await safe_edit(
+        callback.message,
+        _plans_header(config, discount),
+        keyboards.plans_menu(
+            config, prefix=prefix, category_id=category_id, discount_percent=discount, back=back
+        ),
     )
     await callback.answer()
 
 
-def _any_provider_enabled(config: Config) -> bool:
-    return (
-        config.platega_enabled
-        or config.rollypay_enabled
-        or config.cryptobot_enabled
-        or config.stars_enabled
-    )
-
-
 @router.callback_query(F.data.startswith("buy:"))
 async def cb_buy(callback: CallbackQuery, config: Config) -> None:
-    plan_id = int(callback.data.split(":", 1)[1])
-    plan = next((p for p in config.plans if p.id == plan_id), None)
+    plan = config.plan(int(callback.data.split(":", 1)[1]))
     if plan is None:
         await callback.answer("Тариф больше не доступен", show_alert=True)
         return
 
-    if not _any_provider_enabled(config):
+    if not config.any_payment_ready:
         await callback.answer(
             "Приём оплаты ещё не настроен в панели", show_alert=True
         )
         return
 
-    price = f"{plan.price_rub:.0f} ₽".replace(".0", "")
-    await callback.message.edit_text(
-        t(config, "{@card} <b>{title}</b> — {price}\n\nСпособ оплаты:",
-          title=plan.title, price=price),
-        reply_markup=keyboards.providers_menu(config, purpose="plan", target=plan_id),
+    async with session() as db:
+        discount = await _user_discount(db, callback.from_user.id)
+
+    await safe_edit(
+        callback.message,
+        _pay_header(config, plan, discount),
+        keyboards.providers_menu(config, purpose="plan", target=str(plan.id)),
     )
     await callback.answer()
+
+
+def _pay_header(config: Config, plan: PlanView, discount: int) -> str:
+    price = discounted_kopeks(plan.price_kopeks, discount)
+    line = format_rub(price)
+    if price != plan.price_kopeks:
+        line = f"{format_rub(price)} (скидка {discount}%, без скидки {format_rub(plan.price_kopeks)})"
+    return t(
+        config,
+        "{@card} <b>{title}</b> — {price}\n{days}\n\nСпособ оплаты:",
+        title=plan.full_title,
+        price=line,
+        days=_plural(plan.days, "день", "дня", "дней"),
+    )
 
 
 # ── Кошелёк ───────────────────────────────────────────────────────────
@@ -322,9 +426,10 @@ async def cb_wallet(callback: CallbackQuery, config: Config) -> None:
         w = await wallet.get_or_create(db, user)
         balance = w.balance_kopeks
 
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         t(config, "{@card} Баланс: <b>{balance} ₽</b>", balance=f"{balance / 100:.2f}"),
-        reply_markup=keyboards.wallet_menu(),
+        keyboards.wallet_menu(),
     )
     await callback.answer()
 
@@ -338,9 +443,10 @@ async def cb_topup_preset(callback: CallbackQuery, config: Config) -> None:
 @router.callback_query(F.data == "topup_custom")
 async def cb_topup_custom(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(UserStates.entering_topup_amount)
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         "Введите сумму пополнения в рублях (от 10 до 100000):",
-        reply_markup=keyboards.back_to_menu(),
+        keyboards.back_to_menu(),
     )
     await callback.answer()
 
@@ -349,7 +455,7 @@ async def cb_topup_custom(callback: CallbackQuery, state: FSMContext) -> None:
 async def on_topup_amount(message: Message, state: FSMContext, config: Config) -> None:
     raw = (message.text or "").strip().replace(",", ".")
     try:
-        amount = float(raw)
+        amount = round(float(raw), 2)
     except ValueError:
         amount = -1
     if not (10 <= amount <= 100_000):
@@ -357,18 +463,18 @@ async def on_topup_amount(message: Message, state: FSMContext, config: Config) -
         return
 
     await state.clear()
+    target = f"{amount:.2f}".rstrip("0").rstrip(".")
     await message.answer(
-        "Способ оплаты:",
-        reply_markup=keyboards.providers_menu(
-            config, purpose="topup", target=f"{amount:g}"
-        ),
+        f"Пополнение на {target} ₽. Способ оплаты:",
+        reply_markup=keyboards.providers_menu(config, purpose="topup", target=target),
     )
 
 
 async def _show_topup_providers(callback: CallbackQuery, config: Config, amount: str) -> None:
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         f"Пополнение на {amount} ₽. Способ оплаты:",
-        reply_markup=keyboards.providers_menu(config, purpose="topup", target=amount),
+        keyboards.providers_menu(config, purpose="topup", target=amount),
     )
     await callback.answer()
 
@@ -377,35 +483,52 @@ async def _show_topup_providers(callback: CallbackQuery, config: Config, amount:
 async def _resolve_pay_target(
     db, config: Config, user: BotUser, purpose: str, target: str
 ):
-    """Разбирает `target` из callback_data в (plan, subscription|None, amount, описание).
+    """Разбирает `target` из callback_data в (plan, subscription|None, сумма, описание).
 
     purpose == "plan"  → target = "{plan_id}" — покупка НОВОГО ключа.
     purpose == "renew" → target = "{subscription_id}-{plan_id}" — продление
     конкретного существующего ключа (проверяем, что он принадлежит user).
     purpose == "topup" → target = сумма в рублях, тариф/ключ не участвуют.
+
+    Сумма для тарифа — уже со скидкой пользователя (промокод).
     """
     if purpose == "topup":
         return None, None, round(float(target) * 100), f"Пополнение баланса на {target} ₽"
 
     if purpose == "renew":
         sub_id_str, _, plan_id_str = target.partition("-")
-        plan = next((p for p in config.plans if p.id == int(plan_id_str)), None)
+        plan = config.plan(int(plan_id_str))
         if plan is None:
             return None, None, 0, ""
         subscription = await db.get(BotSubscription, int(sub_id_str))
         if subscription is None or subscription.user_id != user.id:
             return None, None, 0, ""
-        return plan, subscription, plan.price_kopeks, f"Продление «{plan.title}»"
+        amount = discounted_kopeks(plan.price_kopeks, user.discount_percent)
+        return plan, subscription, amount, f"Продление «{plan.full_title}»"
 
-    plan = next((p for p in config.plans if p.id == int(target)), None)
+    plan = config.plan(int(target))
     if plan is None:
         return None, None, 0, ""
-    return plan, None, plan.price_kopeks, f"Оплата тарифа «{plan.title}»"
+    amount = discounted_kopeks(plan.price_kopeks, user.discount_percent)
+    return plan, None, amount, f"Оплата тарифа «{plan.full_title}»"
 
 
 @router.callback_query(F.data.startswith("pay:"))
 async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
     _, purpose, provider_name, target = callback.data.split(":", 3)
+
+    if provider_name == "wallet":
+        await _pay_from_wallet(callback, config, purpose, target)
+        return
+    if provider_name == "stars":
+        await _pay_with_stars(callback, config, bot, purpose, target)
+        return
+
+    try:
+        provider = PaymentProvider(provider_name)
+    except ValueError:
+        await callback.answer("Неизвестный способ оплаты", show_alert=True)
+        return
 
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
@@ -416,76 +539,7 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             await callback.answer("Тариф или ключ недоступен", show_alert=True)
             return
 
-        if provider_name == "wallet":
-            if plan is None:
-                await callback.answer(
-                    "Из баланса можно оплатить только тариф", show_alert=True
-                )
-                return
-            try:
-                await wallet.debit(
-                    db, user, amount_kopeks, WalletTxType.PURCHASE, description=description
-                )
-            except wallet.InsufficientFunds as exc:
-                await callback.answer(str(exc), show_alert=True)
-                return
-
-            if subscription is not None:
-                subscription = await subs.extend_subscription(db, config, subscription, plan)
-                until = subscription.expire_at
-            else:
-                subscription = await subs.create_subscription(
-                    db, config, user, plan, source="wallet"
-                )
-                until = subscription.expire_at
-
-            reward = await subs.apply_referral_reward(db, config, user)
-            commissions = await subs.after_paid_purchase(
-                db, config, user, amount_kopeks, plan_title=plan.title
-            )
-            await callback.message.edit_text(
-                t(
-                    config,
-                    "{@check} Оплачено с баланса. Подписка продлена до {until}",
-                    until=_date(until),
-                ),
-                reply_markup=keyboards.back_to_menu(),
-            )
-            await callback.answer()
-            if reward is not None:
-                referrer, days = reward
-                await bot.send_message(
-                    referrer.telegram_id,
-                    t(config, "{@gift} Ваш друг оплатил подписку — начислено {days} дн.", days=days),
-                )
-            for referrer, share in commissions:
-                await bot.send_message(
-                    referrer.telegram_id,
-                    t(
-                        config,
-                        "{@gift} Начислена реферальная комиссия: {amount} ₽",
-                        amount=f"{share / 100:.2f}",
-                    ),
-                )
-            return
-
-        if provider_name == "stars":
-            amount_stars = stars.rub_to_stars(amount_kopeks / 100)
-            payload = json.dumps({"purpose": purpose, "target": target})
-            await callback.message.delete()
-            await bot.send_invoice(
-                chat_id=callback.from_user.id,
-                title=description,
-                description=description,
-                payload=payload,
-                currency="XTR",
-                prices=[LabeledPrice(label=description, amount=amount_stars)],
-            )
-            await callback.answer()
-            return
-
         try:
-            provider = PaymentProvider(provider_name)
             payment, pay_url = await payment_flow.create_external_payment(
                 db,
                 config,
@@ -500,23 +554,131 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
         except payment_flow.PaymentFlowError as exc:
             await callback.answer(str(exc), show_alert=True)
             return
+        payment_id = payment.id
 
-    if pay_url:
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Оплатить", url=pay_url)
+    builder.button(text="🔄 Проверить оплату", callback_data=f"checkpay:{payment_id}")
+    builder.button(text="‹ Назад", callback_data="menu")
+    builder.adjust(1)
+    await safe_edit(
+        callback.message,
+        t(
+            config,
+            "{@card} <b>{description}</b>\nК оплате: <b>{amount}</b>\n\n"
+            "Нажмите «Оплатить». После оплаты доступ выдаётся автоматически, "
+            "если этого не произошло — нажмите «Проверить оплату».",
+            description=description,
+            amount=format_rub(amount_kopeks),
+        ),
+        builder.as_markup(),
+    )
+    await callback.answer()
 
-        builder = InlineKeyboardBuilder()
-        builder.button(text="Оплатить", url=pay_url)
-        builder.button(text="🔄 Проверить оплату", callback_data=f"checkpay:{payment.id}")
-        builder.button(text="‹ Назад", callback_data="menu")
-        builder.adjust(1)
-        await callback.message.edit_text(
-            t(config, "{@card} Ссылка на оплату готова:"), reply_markup=builder.as_markup()
+
+async def _pay_from_wallet(
+    callback: CallbackQuery, config: Config, purpose: str, target: str
+) -> None:
+    """Списание с баланса и выдача — одна транзакция (сбой Remnawave вернёт
+    деньги). Реферальные начисления и уведомления — отдельно, после коммита."""
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
+            db, config, user, purpose, target
         )
-    else:
-        await callback.message.edit_text(
-            t(config, "{@warning} Не удалось создать счёт, попробуйте позже"),
-            reply_markup=keyboards.back_to_menu(),
+        if plan is None:
+            await callback.answer(
+                "Из баланса можно оплатить только тариф", show_alert=True
+            )
+            return
+        try:
+            await wallet.debit(
+                db, user, amount_kopeks, WalletTxType.PURCHASE, description=description
+            )
+        except wallet.InsufficientFunds as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+
+        try:
+            if subscription is not None:
+                subscription = await subs.extend_subscription(
+                    db, config, subscription, plan, amount_kopeks=amount_kopeks
+                )
+            else:
+                subscription = await subs.create_subscription(
+                    db, config, user, plan, source="wallet", amount_kopeks=amount_kopeks
+                )
+        except RemnawaveError as exc:
+            log.error("Оплата с баланса: Remnawave недоступна: %s", exc)
+            # Исключение откатит списание вместе с сессией.
+            await callback.answer(
+                "Не удалось выдать доступ, деньги не списаны. Попробуйте позже.",
+                show_alert=True,
+            )
+            raise
+        user.discount_percent = 0
+        until = subscription.expire_at
+        user_id = user.id
+        plan_title = plan.full_title
+
+    await safe_edit(
+        callback.message,
+        t(
+            config,
+            "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
+            title=plan.title,
+            until=_date(until),
+        ),
+        keyboards.back_to_menu(),
+    )
+    await callback.answer()
+    await payment_processor.after_purchase_effects(config, user_id, amount_kopeks, plan_title)
+
+
+async def _pay_with_stars(
+    callback: CallbackQuery, config: Config, bot: Bot, purpose: str, target: str
+) -> None:
+    """Счёт в Stars регистрируется как Payment ДО выставления: если после
+    оплаты выдача не удастся (Remnawave лежит), воркер догонки применит её
+    позже — деньги, списанные Telegram, не потеряются."""
+    if not config.stars_enabled:
+        await callback.answer("Оплата Stars отключена", show_alert=True)
+        return
+
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
+            db, config, user, purpose, target
         )
+        if purpose != "topup" and plan is None:
+            await callback.answer("Тариф или ключ недоступен", show_alert=True)
+            return
+        payment = Payment(
+            user_id=user.id,
+            provider=PaymentProvider.STARS,
+            external_id=f"stars-{uuid4()}",
+            amount_kopeks=amount_kopeks,
+            purpose=PaymentPurpose.TOPUP if purpose == "topup" else PaymentPurpose.PLAN,
+            plan_id=plan.id if plan else None,
+            subscription_id=subscription.id if subscription else None,
+        )
+        db.add(payment)
+        await db.flush()
+        payment_id = payment.id
+
+    amount_stars = stars.rub_to_stars(amount_kopeks / 100)
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title=description[:32],
+        description=f"{description} — {format_rub(amount_kopeks)}",
+        payload=str(payment_id),
+        currency="XTR",
+        prices=[LabeledPrice(label=description[:32], amount=amount_stars)],
+    )
     await callback.answer()
 
 
@@ -526,14 +688,16 @@ async def cb_check_payment(callback: CallbackQuery, config: Config) -> None:
     try:
         paid = await payment_check.check_and_apply(payment_id)
     except Exception:  # noqa: BLE001
+        log.exception("Ручная проверка платежа %s", payment_id)
         await callback.answer("Не удалось проверить оплату, попробуйте позже", show_alert=True)
         return
 
     if paid:
         await callback.answer("Оплата подтверждена!", show_alert=True)
-        await callback.message.edit_text(
-            t(config, "{@check} Оплата подтверждена, подписка выдана"),
-            reply_markup=keyboards.back_to_menu(),
+        await safe_edit(
+            callback.message,
+            t(config, "{@check} Оплата подтверждена, доступ выдан. Детали — в «Мои подписки»."),
+            keyboards.back_to_menu(),
         )
     else:
         await callback.answer("Оплата пока не поступила, попробуйте чуть позже", show_alert=True)
@@ -546,72 +710,68 @@ async def on_pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
 
 @router.message(F.successful_payment)
 async def on_successful_payment(message: Message, config: Config) -> None:
-    payload = json.loads(message.successful_payment.invoice_payload)
-    amount_rub = message.successful_payment.total_amount * stars.RUB_PER_STAR
+    payload = message.successful_payment.invoice_payload
+    charge_id = message.successful_payment.telegram_payment_charge_id
 
     async with session() as db:
-        user = await subs.get_or_create_user(db, message.from_user.id)
-
-        if payload["purpose"] == "topup":
-            await wallet.credit(
-                db,
-                user,
-                round(amount_rub * 100),
-                WalletTxType.TOPUP,
-                description="Telegram Stars",
-            )
-            await message.answer(
-                t(config, "{@check} Баланс пополнен на {amount} ₽", amount=f"{amount_rub:.2f}")
-            )
-            return
-
-        plan, subscription, amount_kopeks, _ = await _resolve_pay_target(
-            db, config, user, payload["purpose"], payload["target"]
-        )
-        if plan is None:
+        payment = None
+        if payload.isdigit():
+            payment = await db.get(Payment, int(payload))
+        if payment is None:
+            # Старый формат payload (JSON) — счёт выставлен до обновления.
+            payment = await _legacy_stars_payment(db, config, message, payload)
+        if payment is None:
+            log.error("Stars: не удалось сопоставить оплату, payload=%r", payload)
             await message.answer(t(config, texts.ERROR_GENERIC))
             return
+        if payment.status == PaymentStatus.PAID:
+            return  # Telegram повторил апдейт
+        payment.status = PaymentStatus.PAID
+        payment.paid_at = datetime.now(UTC)
+        payment.external_id = charge_id or payment.external_id
+        payment.raw_payload = {
+            "total_amount": message.successful_payment.total_amount,
+            "currency": message.successful_payment.currency,
+            "charge_id": charge_id,
+        }
+        payment_id = payment.id
 
-        if subscription is not None:
-            subscription = await subs.extend_subscription(db, config, subscription, plan)
-            until = subscription.expire_at
-        else:
-            subscription = await subs.create_subscription(db, config, user, plan, source="stars")
-            until = subscription.expire_at
+    # Выдача и уведомления — тем же кодом, что и для внешних платежей.
+    await payment_processor.handle(payment_id)
 
-        reward = await subs.apply_referral_reward(db, config, user)
-        commissions = await subs.after_paid_purchase(
-            db, config, user, amount_kopeks, plan_title=plan.title
-        )
 
-    await message.answer(
-        t(config, "{@check} Оплата получена, подписка продлена до {until}", until=_date(until))
+async def _legacy_stars_payment(db, config: Config, message: Message, payload: str):
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return None
+    user = await subs.get_or_create_user(db, message.from_user.id)
+    plan, subscription, amount_kopeks, _ = await _resolve_pay_target(
+        db, config, user, data.get("purpose", "plan"), str(data.get("target", ""))
     )
-    if reward is not None:
-        referrer, days = reward
-        await message.bot.send_message(
-            referrer.telegram_id,
-            t(config, "{@gift} Ваш друг оплатил подписку — начислено {days} дн.", days=days),
-        )
-    for referrer, share in commissions:
-        await message.bot.send_message(
-            referrer.telegram_id,
-            t(config, "{@gift} Начислена реферальная комиссия: {amount} ₽", amount=f"{share / 100:.2f}"),
-        )
-    for referrer, share in commissions:
-        await message.bot.send_message(
-            referrer.telegram_id,
-            t(config, "{@gift} Начислена реферальная комиссия: {amount} ₽", amount=f"{share / 100:.2f}"),
-        )
+    if data.get("purpose") == "topup":
+        amount_kopeks = round(message.successful_payment.total_amount * stars.RUB_PER_STAR * 100)
+    elif plan is None:
+        return None
+    payment = Payment(
+        user_id=user.id,
+        provider=PaymentProvider.STARS,
+        external_id=f"stars-{uuid4()}",
+        amount_kopeks=amount_kopeks,
+        purpose=PaymentPurpose.TOPUP if data.get("purpose") == "topup" else PaymentPurpose.PLAN,
+        plan_id=plan.id if plan else None,
+        subscription_id=subscription.id if subscription else None,
+    )
+    db.add(payment)
+    await db.flush()
+    return payment
 
 
 # ── Промокоды ─────────────────────────────────────────────────────────
 @router.callback_query(F.data == "promo")
 async def cb_promo(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
     await state.set_state(UserStates.entering_promo_code)
-    await callback.message.edit_text(
-        "Введите промокод:", reply_markup=keyboards.back_to_menu()
-    )
+    await safe_edit(callback.message, "Введите промокод:", keyboards.back_to_menu())
     await callback.answer()
 
 
@@ -629,23 +789,36 @@ async def on_promo_code(message: Message, state: FSMContext, config: Config) -> 
             await message.answer(t(config, "{@cross} {reason}", reason=str(exc)))
             return
 
-        if code_row.bonus_days > 0:
-            user = await subs.grant_bonus_days(
-                db, config, user, code_row.bonus_days, source="promo"
-            )
+        bonus_days = code_row.bonus_days
+        discount = code_row.discount_percent
+        if discount > 0:
+            # Скидка хранится на пользователе и применяется к следующей
+            # оплате тарифа (см. _resolve_pay_target), после неё сгорает.
+            user.discount_percent = max(user.discount_percent or 0, discount)
+        if bonus_days > 0:
+            try:
+                user = await subs.grant_bonus_days(
+                    db, config, user, bonus_days, source="promo"
+                )
+            except RemnawaveError as exc:
+                log.error("Промокод: Remnawave недоступна: %s", exc)
+                await message.answer(
+                    t(config, "{@warning} Не удалось начислить дни, попробуйте позже")
+                )
+                raise
 
     text = t(config, "{@check} Промокод активирован!")
-    if code_row.bonus_days > 0:
-        text += f"\nНачислено дней: {code_row.bonus_days}"
-    if code_row.discount_percent > 0:
-        text += f"\nСкидка {code_row.discount_percent}% учтётся при следующей оплате тарифа."
+    if bonus_days > 0:
+        text += f"\nНачислено дней: {bonus_days}"
+    if discount > 0:
+        text += f"\nСкидка {discount}% будет применена к следующей оплате тарифа."
     await message.answer(text, reply_markup=keyboards.back_to_menu())
 
 
 # ── Реферальная программа ─────────────────────────────────────────────
 @router.callback_query(F.data == "referral")
 async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None:
-    if not config.referral_enabled:
+    if not config.referral_visible:
         await callback.answer("Реферальная программа отключена", show_alert=True)
         return
 
@@ -660,32 +833,39 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
 
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{code}"
-    text = t(
-        config,
-        "{@star} <b>Пригласите друзей</b>\n\n"
-        "За каждого друга, который оплатит подписку, вам начислят {reward} дн.\n"
-        "Друг получит {bonus} дн. бонусом к триалу.\n\n"
-        "Ваша ссылка:\n<code>{link}</code>\n\n"
-        "Приглашено: {invited}",
-        reward=config.referral_reward_days,
-        bonus=config.referral_bonus_days,
-        link=link,
-        invited=invited or 0,
-    )
-    await callback.message.edit_text(text, reply_markup=keyboards.referral_menu())
+
+    lines = ["{@star} <b>Пригласите друзей</b>", ""]
+    if config.referral_enabled:
+        lines.append(
+            f"За первую оплату каждого друга вам начислят {config.referral_reward_days} дн."
+        )
+        if config.referral_bonus_days:
+            lines.append(f"Друг получит {config.referral_bonus_days} дн. бонусом к пробному периоду.")
+    if config.referral_commission_enabled:
+        lines.append(
+            f"С каждой оплаты приглашённого — {config.referral_level1_percent}% на ваш баланс"
+            + (
+                f", с оплат друзей ваших друзей — {config.referral_level2_percent}%."
+                if config.referral_level2_percent
+                else "."
+            )
+        )
+    lines += ["", "Ваша ссылка:", "<code>{link}</code>", "", "Приглашено: {invited}"]
+    text = t(config, "\n".join(lines), link=link, invited=invited or 0)
+    await safe_edit(callback.message, text, keyboards.referral_menu())
     await callback.answer()
 
 
-# ── Устройства ────────────────────────────────────────────────────────
 # ── Мои подписки (несколько ключей на пользователя) ────────────────────
 @router.callback_query(F.data == "my_subscriptions")
 async def cb_my_subscriptions(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
         rows = await subs.list_subscriptions(db, user)
+        titles = await _plan_titles(db, rows)
 
     text = "🔑 <b>Мои подписки</b>" if rows else t(config, texts.SUBSCRIPTION_NONE)
-    await callback.message.edit_text(text, reply_markup=keyboards.subscriptions_menu(rows))
+    await safe_edit(callback.message, text, keyboards.subscriptions_menu(rows, titles))
     await callback.answer()
 
 
@@ -697,28 +877,64 @@ async def _get_own_subscription(db, telegram_id: int, subscription_id: int):
     return subscription
 
 
-@router.callback_query(F.data.startswith("viewsub:"))
-async def cb_view_subscription(callback: CallbackQuery, config: Config) -> None:
-    subscription_id = int(callback.data.split(":", 1)[1])
+async def _render_subscription(callback: CallbackQuery, config: Config, subscription_id: int) -> None:
     async with session() as db:
         subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+        if subscription is None:
+            await callback.answer("Ключ не найден", show_alert=True)
+            return
+        title = (await _plan_titles(db, [subscription]))[subscription.id]
+        plan_row = await db.get(Plan, subscription.plan_id) if subscription.plan_id else None
 
-    if subscription is None:
-        await callback.answer("Ключ не найден", show_alert=True)
-        return
-
-    text = (
-        f"🔑 <b>{subscription.username}</b>\n\n"
-        f"Действует до: <b>{_date(subscription.expire_at)}</b> "
-        f"({_left(subscription.expire_at)})"
-    )
-    await callback.message.edit_text(
-        text,
-        reply_markup=keyboards.subscription_detail_menu(
-            subscription_id, has_url=bool(subscription.subscription_url)
+    lines = [
+        f"🔑 <b>{title}</b>",
+        "",
+        f"Действует до: <b>{_date(subscription.expire_at)}</b> ({_left(subscription.expire_at)})",
+    ]
+    if plan_row is not None:
+        lines.append(f"Устройств: до {plan_row.hwid_limit}")
+        lines.append(
+            "Автопродление с баланса: <b>{}</b>".format(
+                "включено" if subscription.auto_renew else "выключено"
+            )
+        )
+    auto_renew = subscription.auto_renew if plan_row is not None else None
+    await safe_edit(
+        callback.message,
+        "\n".join(lines),
+        keyboards.subscription_detail_menu(
+            subscription_id, has_url=bool(subscription.subscription_url), auto_renew=auto_renew
         ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("viewsub:"))
+async def cb_view_subscription(callback: CallbackQuery, config: Config) -> None:
+    await _render_subscription(callback, config, int(callback.data.split(":", 1)[1]))
+
+
+@router.callback_query(F.data.startswith("subautorenew:"))
+async def cb_toggle_auto_renew(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+        if subscription is None:
+            await callback.answer("Ключ не найден", show_alert=True)
+            return
+        if subscription.plan_id is None:
+            await callback.answer("У этого ключа нет тарифа для автопродления", show_alert=True)
+            return
+        subscription.auto_renew = not subscription.auto_renew
+        enabled = subscription.auto_renew
+
+    await callback.answer(
+        "Автопродление включено: за сутки до окончания списывается цена тарифа с баланса"
+        if enabled
+        else "Автопродление выключено",
+        show_alert=enabled,
+    )
+    await _render_subscription(callback, config, subscription_id)
 
 
 @router.callback_query(F.data.startswith("sublink:"))
@@ -731,9 +947,14 @@ async def cb_subscription_link(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Ссылка недоступна", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         f"🔗 Ссылка для подключения:\n\n<code>{subscription.subscription_url}</code>",
-        reply_markup=keyboards.subscription_detail_menu(subscription_id, has_url=True),
+        keyboards.subscription_detail_menu(
+            subscription_id,
+            has_url=True,
+            auto_renew=subscription.auto_renew if subscription.plan_id else None,
+        ),
     )
     await callback.answer()
 
@@ -743,26 +964,30 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
     subscription_id = int(callback.data.split(":", 1)[1])
     async with session() as db:
         subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+        discount = await _user_discount(db, callback.from_user.id)
     if subscription is None:
         await callback.answer("Ключ не найден", show_alert=True)
         return
 
     if not config.plans:
-        await callback.message.edit_text(
-            t(config, texts.NO_PLANS), reply_markup=keyboards.back_to_menu()
-        )
+        await safe_edit(callback.message, t(config, texts.NO_PLANS), keyboards.back_to_menu())
         await callback.answer()
         return
 
     prefix = f"renewbuy-{subscription_id}"
+    back = f"viewsub:{subscription_id}"
     categories = keyboards.plan_categories(config)
     if categories:
-        await callback.message.edit_text(
-            "Выберите категорию тарифа:", reply_markup=keyboards.categories_menu(config, prefix=prefix)
+        await safe_edit(
+            callback.message,
+            "Выберите категорию тарифа:",
+            keyboards.categories_menu(config, prefix=prefix, back=back),
         )
     else:
-        await callback.message.edit_text(
-            t(config, texts.PLANS_HEADER), reply_markup=keyboards.plans_menu(config, prefix=prefix)
+        await safe_edit(
+            callback.message,
+            _plans_header(config, discount),
+            keyboards.plans_menu(config, prefix=prefix, discount_percent=discount, back=back),
         )
     await callback.answer()
 
@@ -771,26 +996,27 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
 async def cb_renew_pick_plan(callback: CallbackQuery, config: Config) -> None:
     prefix, plan_id_str = callback.data.split(":", 1)
     subscription_id = int(prefix.removeprefix("renewbuy-"))
-    plan = next((p for p in config.plans if p.id == int(plan_id_str)), None)
+    plan = config.plan(int(plan_id_str))
     if plan is None:
         await callback.answer("Тариф больше не доступен", show_alert=True)
         return
-    if not _any_provider_enabled(config):
+    if not config.any_payment_ready:
         await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
         return
 
+    async with session() as db:
+        discount = await _user_discount(db, callback.from_user.id)
+
     target = f"{subscription_id}-{plan.id}"
-    price = f"{plan.price_rub:.0f} ₽".replace(".0", "")
-    await callback.message.edit_text(
-        t(config, "{@card} <b>{title}</b> — {price}\n\nСпособ оплаты:", title=plan.title, price=price),
-        reply_markup=keyboards.providers_menu(config, purpose="renew", target=target),
+    await safe_edit(
+        callback.message,
+        _pay_header(config, plan, discount),
+        keyboards.providers_menu(config, purpose="renew", target=target),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("subdevices:"))
-async def cb_subscription_devices(callback: CallbackQuery, config: Config) -> None:
-    subscription_id = int(callback.data.split(":", 1)[1])
+async def _render_devices(callback: CallbackQuery, config: Config, subscription_id: int) -> None:
     async with session() as db:
         subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
     if subscription is None:
@@ -817,11 +1043,17 @@ async def cb_subscription_devices(callback: CallbackQuery, config: Config) -> No
     else:
         text = t(config, texts.DEVICES_EMPTY)
 
-    await callback.message.edit_text(
+    await safe_edit(
+        callback.message,
         text,
-        reply_markup=keyboards.devices_menu(devices, bool(devices), subscription_id=subscription_id),
+        keyboards.devices_menu(devices, bool(devices), subscription_id=subscription_id),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subdevices:"))
+async def cb_subscription_devices(callback: CallbackQuery, config: Config) -> None:
+    await _render_devices(callback, config, int(callback.data.split(":", 1)[1]))
 
 
 @router.callback_query(F.data.startswith("devicesreset:"))
@@ -844,7 +1076,7 @@ async def cb_subscription_devices_reset(callback: CallbackQuery, config: Config)
         return
 
     await callback.answer("Устройства отвязаны", show_alert=True)
-    await cb_subscription_devices(callback, config)
+    await _render_devices(callback, config, subscription_id)
 
 
 # ── Профиль ───────────────────────────────────────────────────────────
@@ -854,46 +1086,75 @@ async def cb_profile(callback: CallbackQuery, config: Config) -> None:
         user = await subs.get_or_create_user(db, callback.from_user.id)
         w = await wallet.get_or_create(db, user)
         balance = w.balance_kopeks
+        discount = user.discount_percent or 0
 
     text = (
         f"👤 <b>Ваш профиль</b>\n\n"
         f"ID: <code>{callback.from_user.id}</code>\n"
         f"💰 Баланс: <b>{balance / 100:.2f} ₽</b>"
     )
-    await callback.message.edit_text(text, reply_markup=keyboards.profile_menu(config))
+    if discount:
+        text += f"\n🎟 Скидка на следующую оплату: <b>{discount}%</b>"
+    await safe_edit(callback.message, text, keyboards.profile_menu(config))
     await callback.answer()
 
 
 @router.callback_query(F.data == "wallet_topup")
 async def cb_wallet_topup(callback: CallbackQuery, config: Config) -> None:
-    await callback.message.edit_text(
-        t(config, "{@card} Выберите сумму пополнения:"), reply_markup=keyboards.wallet_menu()
+    await safe_edit(
+        callback.message,
+        t(config, "{@card} Выберите сумму пополнения:"),
+        keyboards.wallet_menu(),
     )
     await callback.answer()
+
+
+_SOURCE_LABEL = {
+    "trial": "пробный период",
+    "promo": "промокод",
+    "referral_reward": "бонус за друга",
+    "wallet": "с баланса",
+    "renewal": "продление",
+    "auto_renewal": "автопродление",
+    "stars": "Telegram Stars",
+    "platega": "СБП / карта",
+    "rollypay": "СБП",
+    "cryptobot": "криптовалюта",
+    "manual": "выдано администратором",
+}
 
 
 @router.callback_query(F.data == "purchase_history")
 async def cb_purchase_history(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        rows = await db.scalars(
-            select(Purchase)
-            .where(Purchase.user_id == user.id)
-            .order_by(Purchase.created_at.desc())
-            .limit(15)
+        rows = list(
+            await db.scalars(
+                select(Purchase)
+                .where(Purchase.user_id == user.id)
+                .order_by(Purchase.created_at.desc())
+                .limit(15)
+            )
         )
-        rows = list(rows)
+        plan_ids = {p.plan_id for p in rows if p.plan_id}
+        titles = {}
+        if plan_ids:
+            plans = await db.scalars(select(Plan).where(Plan.id.in_(plan_ids)))
+            titles = {p.id: p.title for p in plans}
 
     if not rows:
         text = "🧾 <b>История покупок</b>\n\nПока пусто."
     else:
-        lines = [
-            f"• {p.created_at.strftime('%d.%m.%Y')} — {p.source} — {p.amount_kopeks / 100:.2f} ₽"
-            for p in rows
-        ]
+        lines = []
+        for p in rows:
+            what = titles.get(p.plan_id) if p.plan_id else None
+            what = what or f"+{_plural(p.days, 'день', 'дня', 'дней')}"
+            how = _SOURCE_LABEL.get(p.source, p.source)
+            amount = f" — {format_rub(p.amount_kopeks)}" if p.amount_kopeks else ""
+            lines.append(f"• {p.created_at.strftime('%d.%m.%Y')} · {what} ({how}){amount}")
         text = "🧾 <b>История покупок</b>\n\n" + "\n".join(lines)
 
-    await callback.message.edit_text(text, reply_markup=keyboards.back_to_menu())
+    await safe_edit(callback.message, text, keyboards.back_to_menu())
     await callback.answer()
 
 

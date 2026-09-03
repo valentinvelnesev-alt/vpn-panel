@@ -79,30 +79,35 @@ async def _send(broadcast_id: int, token: str) -> None:
     bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         for user in recipients:
-            try:
-                if photo_url:
-                    await bot.send_photo(
-                        user.telegram_id,
-                        photo_url,
-                        caption=text,
-                        reply_markup=keyboard,
-                    )
-                else:
-                    await bot.send_message(user.telegram_id, text, reply_markup=keyboard)
-                ok = True
-            except TelegramForbiddenError:
-                ok = False
-                async with SessionLocal() as db:
-                    blocked_user = await db.get(BotUser, user.id)
-                    if blocked_user is not None:
-                        blocked_user.has_stopped_bot = True
-                        await db.commit()
-            except TelegramRetryAfter as exc:
-                await asyncio.sleep(exc.retry_after)
-                ok = False
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Не удалось отправить %s: %s", user.telegram_id, exc)
-                ok = False
+            ok = False
+            for attempt in range(3):
+                try:
+                    if photo_url:
+                        await bot.send_photo(
+                            user.telegram_id,
+                            photo_url,
+                            caption=text,
+                            reply_markup=keyboard,
+                        )
+                    else:
+                        await bot.send_message(user.telegram_id, text, reply_markup=keyboard)
+                    ok = True
+                    break
+                except TelegramForbiddenError:
+                    async with SessionLocal() as db:
+                        blocked_user = await db.get(BotUser, user.id)
+                        if blocked_user is not None:
+                            blocked_user.has_stopped_bot = True
+                            await db.commit()
+                    break
+                except TelegramRetryAfter as exc:
+                    # Лимит Telegram — это не отказ адресата: ждём и
+                    # повторяем, а не записываем в «не доставлено».
+                    await asyncio.sleep(exc.retry_after + 0.5)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Не удалось отправить %s: %s", user.telegram_id, exc)
+                    break
 
             async with SessionLocal() as db:
                 broadcast = await db.get(Broadcast, broadcast_id)

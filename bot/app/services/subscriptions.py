@@ -9,6 +9,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config, PlanView
@@ -16,6 +17,7 @@ from app.services import referral
 from app.services.notify import send as notify_send
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
+from shared.sync import refresh_user_summary
 
 log = logging.getLogger("bot.subscriptions")
 
@@ -33,17 +35,33 @@ async def get_or_create_user(
         select(BotUser).where(BotUser.telegram_id == telegram_id)
     )
     if user is None:
-        user = BotUser(telegram_id=telegram_id, **profile)
-        db.add(user)
-        await db.flush()
+        # Два апдейта от нового пользователя приходят одновременно (сообщение
+        # и нажатие кнопки) — второй INSERT упирается в уникальный индекс.
+        # SAVEPOINT откатывает только вставку, а не всю сессию.
+        try:
+            async with db.begin_nested():
+                user = BotUser(telegram_id=telegram_id, **profile)
+                db.add(user)
+                await db.flush()
+        except IntegrityError:
+            user = await db.scalar(
+                select(BotUser).where(BotUser.telegram_id == telegram_id)
+            )
+            if user is None:  # pragma: no cover — гонка с удалением
+                raise
+            _apply_profile(user, profile)
     else:
-        for key, value in profile.items():
-            if value:
-                setattr(user, key, value)
-        # Пользователь снова пишет боту — значит, не блокировал его.
-        user.has_stopped_bot = False
+        _apply_profile(user, profile)
     user.last_seen_at = datetime.now(UTC)
     return user
+
+
+def _apply_profile(user: BotUser, profile: dict[str, object]) -> None:
+    for key, value in profile.items():
+        if value:
+            setattr(user, key, value)
+    # Пользователь снова пишет боту — значит, не блокировал его.
+    user.has_stopped_bot = False
 
 
 def _username_for(telegram_id: int) -> str:
@@ -55,6 +73,19 @@ def _new_key_username(telegram_id: int) -> str:
     # Для дополнительных ключей нужна ГЛОБАЛЬНО уникальная строка — иначе
     # второй ключ того же пользователя столкнётся по username с первым.
     return f"tg_{telegram_id}_{secrets.token_hex(3)}"
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def _base_for_extension(current: datetime | None) -> datetime:
+    """Продление считается от даты окончания, если подписка ещё жива."""
+    now = datetime.now(UTC)
+    current = _aware(current)
+    return current if current and current > now else now
 
 
 async def _mirror_subscription(
@@ -99,14 +130,8 @@ async def grant(
     plan_id: int | None = None,
     amount_kopeks: int = 0,
 ) -> BotUser:
-    """Выдаёт или продлевает доступ и записывает факт выдачи."""
-    now = datetime.now(UTC)
-    current = user.expire_at
-    if current is not None and current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    # Продление от текущей даты окончания, если подписка ещё жива.
-    base = current if current and current > now else now
-    expire_at = base + timedelta(days=days)
+    """Выдаёт или продлевает доступ на основном ключе и записывает факт выдачи."""
+    expire_at = _base_for_extension(user.expire_at) + timedelta(days=days)
 
     client = client_for(config)
     try:
@@ -156,6 +181,7 @@ async def grant(
             expire_at=user.expire_at,
         )
     )
+    await refresh_user_summary(db, user)
     log.info(
         "Выдан доступ: tg=%s дней=%s источник=%s", user.telegram_id, days, source
     )
@@ -190,12 +216,7 @@ async def grant_bonus_days(
     Аккаунт создаётся только если его ещё не было (тогда используются
     триальные сквады как самый общий доступ по умолчанию).
     """
-    now = datetime.now(UTC)
-    current = user.expire_at
-    if current is not None and current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    base = current if current and current > now else now
-    expire_at = base + timedelta(days=days)
+    expire_at = _base_for_extension(user.expire_at) + timedelta(days=days)
 
     client = client_for(config)
     try:
@@ -236,6 +257,7 @@ async def grant_bonus_days(
             expire_at=user.expire_at,
         )
     )
+    await refresh_user_summary(db, user)
     log.info("Начислены бонусные дни: tg=%s дней=%s источник=%s", user.telegram_id, days, source)
     return user
 
@@ -267,49 +289,80 @@ async def list_subscriptions(db: AsyncSession, user: BotUser) -> list[BotSubscri
     return list(rows)
 
 
+async def _trial_key(db: AsyncSession, user: BotUser) -> BotSubscription | None:
+    """Триальный ключ пользователя, если это его единственный ключ без
+    тарифа: при первой покупке его апгрейдим, а не оставляем висеть рядом
+    с платным (так же поступает исходный бот — там пробный ключ удаляется)."""
+    if not user.trial_used:
+        return None
+    rows = await list_subscriptions(db, user)
+    if len(rows) != 1 or rows[0].plan_id is not None:
+        return None
+    return rows[0]
+
+
 async def create_subscription(
-    db: AsyncSession, config: Config, user: BotUser, plan: PlanView, *, source: str
+    db: AsyncSession,
+    config: Config,
+    user: BotUser,
+    plan: PlanView,
+    *,
+    source: str,
+    amount_kopeks: int | None = None,
 ) -> BotSubscription:
     """Покупка тарифа как в исходном боте: КАЖДАЯ покупка заводит новый
     независимый ключ (свой аккаунт Remnawave), а не продлевает старый.
 
-    Первый ключ пользователя дополнительно становится «основным»
-    (BotUser.remnawave_uuid/expire_at) — на нём по-прежнему держатся
-    триал-гейт, автопродление и напоминания об истечении, рассчитанные на
-    единственную подписку. Второй и последующие ключи существуют только
-    как отдельные строки `bot_subscriptions`."""
+    Исключение — пробный ключ: если у пользователя есть только триал,
+    покупка превращает его в платный (сквады, лимит устройств и срок
+    тарифа), иначе меню и напоминания продолжали бы жить по датам триала.
+    """
+    paid = plan.price_kopeks if amount_kopeks is None else amount_kopeks
     expire_at = datetime.now(UTC) + timedelta(days=plan.days)
+
+    trial = await _trial_key(db, user)
 
     client = client_for(config)
     try:
-        remote = await client.create_user(
-            username=_new_key_username(user.telegram_id),
-            expire_at=expire_at,
-            internal_squad_uuids=plan.squad_uuids,
-            telegram_id=user.telegram_id,
-            hwid_device_limit=plan.hwid_limit,
-            traffic_limit_bytes=plan.traffic_limit_bytes,
-            description=f"Выдано ботом: {source}",
-        )
+        if trial is not None:
+            remote = await client.update_user(
+                trial.remnawave_id,
+                expireAt=expire_at.isoformat(),
+                status="ACTIVE",
+                activeInternalSquads=plan.squad_uuids,
+                hwidDeviceLimit=plan.hwid_limit,
+                trafficLimitBytes=plan.traffic_limit_bytes,
+                description=f"Выдано ботом: {source} (апгрейд с триала)",
+            )
+        else:
+            remote = await client.create_user(
+                username=_new_key_username(user.telegram_id),
+                expire_at=expire_at,
+                internal_squad_uuids=plan.squad_uuids,
+                telegram_id=user.telegram_id,
+                hwid_device_limit=plan.hwid_limit,
+                traffic_limit_bytes=plan.traffic_limit_bytes,
+                description=f"Выдано ботом: {source}",
+            )
     finally:
         await client.aclose()
 
-    subscription = BotSubscription(
-        user_id=user.id,
-        remnawave_id=remote.id,
-        username=remote.username,
-        subscription_url=remote.subscription_url,
-        expire_at=remote.expire_at or expire_at,
-        plan_id=plan.id,
-    )
-    db.add(subscription)
+    if trial is not None:
+        subscription = trial
+        subscription.subscription_url = remote.subscription_url or trial.subscription_url
+        subscription.expire_at = remote.expire_at or expire_at
+        subscription.plan_id = plan.id
+    else:
+        subscription = BotSubscription(
+            user_id=user.id,
+            remnawave_id=remote.id,
+            username=remote.username,
+            subscription_url=remote.subscription_url,
+            expire_at=remote.expire_at or expire_at,
+            plan_id=plan.id,
+        )
+        db.add(subscription)
     await db.flush()
-
-    is_first_ever = user.remnawave_uuid is None
-    if is_first_ever:
-        user.remnawave_uuid = str(remote.id)
-        user.subscription_url = remote.subscription_url
-        user.expire_at = subscription.expire_at
 
     db.add(
         Purchase(
@@ -317,29 +370,36 @@ async def create_subscription(
             plan_id=plan.id,
             subscription_id=subscription.id,
             days=plan.days,
-            amount_kopeks=plan.price_kopeks,
+            amount_kopeks=paid,
             source=source,
             expire_at=subscription.expire_at,
         )
     )
+    await refresh_user_summary(db, user)
     log.info(
-        "Создан новый ключ: tg=%s тариф=%s источник=%s", user.telegram_id, plan.title, source
+        "%s: tg=%s тариф=%s источник=%s",
+        "Апгрейд триала" if trial is not None else "Создан новый ключ",
+        user.telegram_id,
+        plan.title,
+        source,
     )
     return subscription
 
 
 async def extend_subscription(
-    db: AsyncSession, config: Config, subscription: BotSubscription, plan: PlanView
+    db: AsyncSession,
+    config: Config,
+    subscription: BotSubscription,
+    plan: PlanView,
+    *,
+    source: str = "renewal",
+    amount_kopeks: int | None = None,
 ) -> BotSubscription:
     """Продление КОНКРЕТНОГО ключа — из экрана «Мои подписки» → ключ →
     «Продлить». В отличие от `create_subscription`, не заводит новый
     аккаунт Remnawave, а расширяет срок действия существующего."""
-    now = datetime.now(UTC)
-    current = subscription.expire_at
-    if current is not None and current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    base = current if current and current > now else now
-    expire_at = base + timedelta(days=plan.days)
+    paid = plan.price_kopeks if amount_kopeks is None else amount_kopeks
+    expire_at = _base_for_extension(subscription.expire_at) + timedelta(days=plan.days)
 
     client = client_for(config)
     try:
@@ -353,15 +413,9 @@ async def extend_subscription(
     finally:
         await client.aclose()
 
-    subscription.subscription_url = remote.subscription_url
+    subscription.subscription_url = remote.subscription_url or subscription.subscription_url
     subscription.expire_at = remote.expire_at or expire_at
     subscription.plan_id = plan.id
-
-    user = await db.get(BotUser, subscription.user_id)
-    if user is not None and user.remnawave_uuid == str(subscription.remnawave_id):
-        # Это основной ключ пользователя — держим зеркало в актуальном виде.
-        user.subscription_url = subscription.subscription_url
-        user.expire_at = subscription.expire_at
 
     db.add(
         Purchase(
@@ -369,11 +423,14 @@ async def extend_subscription(
             plan_id=plan.id,
             subscription_id=subscription.id,
             days=plan.days,
-            amount_kopeks=plan.price_kopeks,
-            source="renewal",
+            amount_kopeks=paid,
+            source=source,
             expire_at=subscription.expire_at,
         )
     )
+    user = await db.get(BotUser, subscription.user_id)
+    if user is not None:
+        await refresh_user_summary(db, user)
     log.info(
         "Продлён ключ #%s: тариф=%s до %s", subscription.id, plan.title, subscription.expire_at
     )
@@ -435,7 +492,5 @@ async def apply_referral_reward(
 def is_active(user: BotUser) -> bool:
     if user.expire_at is None:
         return False
-    expire = user.expire_at
-    if expire.tzinfo is None:
-        expire = expire.replace(tzinfo=UTC)
+    expire = _aware(user.expire_at)
     return expire > datetime.now(UTC)

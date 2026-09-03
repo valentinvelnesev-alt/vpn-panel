@@ -223,6 +223,43 @@ function StarsCard({ providers }: { providers: Providers }) {
   )
 }
 
+function WebhooksCard({ providers }: { providers: Providers }) {
+  const urls = providers.webhook_urls ?? {}
+  const rows: [string, string][] = [
+    ['Platega', urls.platega],
+    ['RollyPay', urls.rollypay],
+    ['CryptoBot', urls.cryptobot],
+  ].filter((r): r is [string, string] => Boolean(r[1]))
+
+  return (
+    <Card>
+      <h2 className="font-medium">Адреса для уведомлений об оплате</h2>
+      <p className="mt-1 text-sm text-muted">
+        Провайдеры не получают адрес колбэка при создании платежа — его нужно один раз
+        вписать в личном кабинете провайдера. Без этого оплата подтверждается только
+        опросом статуса (кнопка «Проверить оплату» и фоновая проверка каждые 30 секунд).
+      </p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-sm text-danger">
+          Не задан публичный адрес панели (PANEL_PUBLIC_URL в .env) — вебхуки принимать
+          некуда.
+        </p>
+      ) : (
+        <dl className="mt-3 space-y-2 text-sm">
+          {rows.map(([name, url]) => (
+            <div key={name} className="flex flex-wrap items-baseline gap-x-3">
+              <dt className="w-24 shrink-0 text-muted">{name}</dt>
+              <dd>
+                <code className="select-all break-all rounded bg-bg px-2 py-1">{url}</code>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </Card>
+  )
+}
+
 function PaymentsLog() {
   const { data } = useQuery({ queryKey: ['payments'], queryFn: () => panel.payments(50) })
 
@@ -276,6 +313,7 @@ export default function Payments() {
       <RollyPayCard providers={providers} />
       <CryptoBotCard providers={providers} />
       <StarsCard providers={providers} />
+      <WebhooksCard providers={providers} />
       <PaymentsLog />
     </div>
   )

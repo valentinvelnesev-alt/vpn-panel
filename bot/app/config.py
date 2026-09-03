@@ -31,6 +31,28 @@ class PlanView:
     def price_rub(self) -> float:
         return self.price_kopeks / 100
 
+    @property
+    def full_title(self) -> str:
+        """«VPN + LTE · Месяц» — тарифы с одинаковым названием в разных
+        категориях иначе неразличимы на экране оплаты."""
+        return f"{self.category_title} · {self.title}" if self.category_title else self.title
+
+
+async def load_plan(db: AsyncSession, plan_id: int | None) -> PlanView | None:
+    """Тариф по id вместе с категорией — включая отключённые.
+
+    `db.get(Plan)` + `plan_view` не годится: `row.category` подгружался бы
+    лениво уже из async-кода и падал с MissingGreenlet у любого тарифа с
+    категорией — то есть при применении каждой оплаты."""
+    if plan_id is None:
+        return None
+    from sqlalchemy.orm import selectinload
+
+    row = await db.scalar(
+        select(PlanRow).options(selectinload(PlanRow.category)).where(PlanRow.id == plan_id)
+    )
+    return plan_view(row) if row is not None else None
+
 
 def plan_view(row: PlanRow) -> PlanView:
     """Строит PlanView из любой строки Plan, включая уже отключённые —
@@ -46,6 +68,19 @@ def plan_view(row: PlanRow) -> PlanView:
         category_id=row.category_id,
         category_title=row.category.title if row.category else None,
     )
+
+
+def discounted_kopeks(price_kopeks: int, discount_percent: int) -> int:
+    """Цена со скидкой, не ниже 1 ₽ — нулевой счёт провайдеры не примут."""
+    percent = max(0, min(int(discount_percent or 0), 100))
+    if percent == 0:
+        return price_kopeks
+    return max(100, round(price_kopeks * (100 - percent) / 100))
+
+
+def format_rub(kopeks: int) -> str:
+    rub = kopeks / 100
+    return f"{rub:.0f} ₽" if kopeks % 100 == 0 else f"{rub:.2f} ₽"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +135,36 @@ class Config:
     @property
     def can_run(self) -> bool:
         return bool(self.enabled and self.token)
+
+    # Провайдер «готов», когда включён И заполнены реквизиты. Кнопка без
+    # реквизитов вела в тупик «оплата сейчас недоступна».
+    @property
+    def platega_ready(self) -> bool:
+        return bool(self.platega_enabled and self.platega_merchant_id and self.platega_secret)
+
+    @property
+    def rollypay_ready(self) -> bool:
+        return bool(self.rollypay_enabled and self.rollypay_api_key)
+
+    @property
+    def cryptobot_ready(self) -> bool:
+        return bool(self.cryptobot_enabled and self.cryptobot_token)
+
+    @property
+    def any_payment_ready(self) -> bool:
+        return (
+            self.platega_ready
+            or self.rollypay_ready
+            or self.cryptobot_ready
+            or self.stars_enabled
+        )
+
+    @property
+    def referral_visible(self) -> bool:
+        return self.referral_enabled or self.referral_commission_enabled
+
+    def plan(self, plan_id: int) -> PlanView | None:
+        return next((p for p in self.plans if p.id == plan_id), None)
 
 
 async def load(db: AsyncSession) -> Config:

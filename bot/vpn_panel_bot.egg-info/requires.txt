@@ -1,0 +1,8 @@
+aiogram>=3.23
+sqlalchemy[asyncio]>=2.0.43
+asyncpg>=0.30
+redis>=6.2
+httpx>=0.28
+pydantic>=2.11
+pydantic-settings>=2.10
+cryptography>=45.0

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -22,6 +22,22 @@ class ProvidersOut(BaseModel):
     cryptobot_enabled: bool
     cryptobot_token_masked: str | None
     stars_enabled: bool
+    # Адреса колбэков — их нужно вписать в кабинете провайдера вручную,
+    # при создании платежа они не передаются.
+    webhook_urls: dict[str, str] = {}
+
+
+def _webhook_urls() -> dict[str, str]:
+    from app.core.config import settings
+
+    base = (settings.public_url or "").rstrip("/")
+    if not base:
+        return {}
+    return {
+        "platega": f"{base}/api/v1/webhooks/platega",
+        "rollypay": f"{base}/api/v1/webhooks/rollypay",
+        "cryptobot": f"{base}/api/v1/webhooks/cryptobot",
+    }
 
 
 @router.get("/providers", response_model=ProvidersOut)
@@ -52,6 +68,7 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         if values[cfg.CRYPTOBOT_TOKEN]
         else None,
         stars_enabled=values[cfg.STARS_ENABLED] == "true",
+        webhook_urls=_webhook_urls(),
     )
 
 
@@ -66,6 +83,13 @@ class PlategaIn(BaseModel):
 async def save_platega(
     data: PlategaIn, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> ProvidersOut:
+    if data.enabled:
+        existing_secret = await cfg.get(db, cfg.PLATEGA_SECRET)
+        if not data.merchant_id or not (data.secret or existing_secret):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Чтобы включить Platega, укажите Merchant ID и секрет",
+            )
     await cfg.set_(db, cfg.PLATEGA_ENABLED, "true" if data.enabled else "false")
     await cfg.set_(db, cfg.PLATEGA_MERCHANT_ID, data.merchant_id or None)
     if data.secret:
@@ -95,6 +119,11 @@ class RollyPayIn(BaseModel):
 async def save_rollypay(
     data: RollyPayIn, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> ProvidersOut:
+    if data.enabled and not (data.api_key or await cfg.get(db, cfg.ROLLYPAY_API_KEY)):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Чтобы включить RollyPay, укажите API-ключ кассы",
+        )
     await cfg.set_(db, cfg.ROLLYPAY_ENABLED, "true" if data.enabled else "false")
     if data.api_key:
         await cfg.set_(db, cfg.ROLLYPAY_API_KEY, data.api_key)
@@ -122,6 +151,11 @@ class CryptoBotIn(BaseModel):
 async def save_cryptobot(
     data: CryptoBotIn, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> ProvidersOut:
+    if data.enabled and not (data.token or await cfg.get(db, cfg.CRYPTOBOT_TOKEN)):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Чтобы включить CryptoBot, укажите токен приложения",
+        )
     await cfg.set_(db, cfg.CRYPTOBOT_ENABLED, "true" if data.enabled else "false")
     if data.token:
         await cfg.set_(db, cfg.CRYPTOBOT_TOKEN, data.token)
