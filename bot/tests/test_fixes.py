@@ -405,3 +405,56 @@ async def test_payment_processor_applies_plan_with_category(db, engine, config, 
     assert len(sent) == 1 and sent[0][0] == 777 and "Месяц" in sent[0][1]
     assert remote[-1][0] == "POST /api/users"
     monkeypatch.setattr(config_module, "load", real_load)
+
+
+# ── Remnawave: занятое имя и лимит трафика ────────────────────────────
+async def test_create_adopts_existing_remnawave_username(db, config, monkeypatch) -> None:
+    """Аккаунт tg_<id> уже есть в Remnawave (старая установка) — вместо
+    вечного «попробуйте позже» подхватываем его и обновляем."""
+    import json
+
+    calls: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else {}
+        calls.append((f"{request.method} {request.url.path}", body))
+        if request.method == "POST" and request.url.path == "/api/users":
+            return httpx.Response(400, json={"message": "User with this username already exists"})
+        if request.url.path.startswith("/api/users/by-username/"):
+            return httpx.Response(200, json={"response": {**REMOTE, "id": 42, "expireAt": "2026-01-01T00:00:00.000Z"}})
+        return httpx.Response(200, json={"response": {**REMOTE, "id": body.get("id", 42), "expireAt": body.get("expireAt")}})
+
+    from shared.remnawave import client as rw
+
+    original = rw.RemnawaveClient.__init__
+
+    def patched(self, base_url, token, **kwargs):
+        original(self, base_url, token, **kwargs)
+        self._client = httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", patched)
+
+    user = await subs.get_or_create_user(db, 777)
+    user = await subs.grant_trial(db, config, user)
+    assert user.remnawave_uuid == "42"
+    methods = [m for m, _ in calls]
+    assert methods == ["POST /api/users", "GET /api/users/by-username/tg_777", "PATCH /api/users"]
+    assert calls[-1][1]["activeInternalSquads"] == ["squad-trial"]
+
+
+async def test_renewal_of_limited_plan_resets_traffic(db, config, remote) -> None:
+    limited = PlanView(id=2, title="Лимит", days=30, price_kopeks=100, squad_uuids=["s"], hwid_limit=1, traffic_limit_bytes=10**9)
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, limited, source="wallet")
+    await subs.extend_subscription(db, config, sub, limited)
+    methods = [m for m, _ in remote]
+    assert f"POST /api/users/{sub.remnawave_id}/actions/reset-traffic" in methods
+    patch_body = [b for m, b in remote if m == "PATCH /api/users"][-1]
+    assert patch_body["trafficLimitBytes"] == 10**9
+
+
+async def test_renewal_without_traffic_limit_does_not_reset(db, config, remote) -> None:
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="wallet")
+    await subs.extend_subscription(db, config, sub, PLAN)
+    assert not any("reset-traffic" in m for m, _ in remote)

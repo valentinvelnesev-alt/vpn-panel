@@ -977,7 +977,25 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
     prefix = f"renewbuy-{subscription_id}"
     back = f"viewsub:{subscription_id}"
     categories = keyboards.plan_categories(config)
-    if categories:
+    current_plan = config.plan(subscription.plan_id) if subscription.plan_id else None
+    if categories and current_plan is not None and any(
+        p.category_id == current_plan.category_id for p in config.plans
+    ):
+        # Продление — в рамках категории ключа: иначе продление тарифа «DE»
+        # тарифом «VPN» молча переключило бы сквады, и клиент потерял бы
+        # доступ к тому, за что платил.
+        await safe_edit(
+            callback.message,
+            _plans_header(config, discount),
+            keyboards.plans_menu(
+                config,
+                prefix=prefix,
+                category_id=current_plan.category_id,
+                discount_percent=discount,
+                back=back,
+            ),
+        )
+    elif categories:
         await safe_edit(
             callback.message,
             "Выберите категорию тарифа:",

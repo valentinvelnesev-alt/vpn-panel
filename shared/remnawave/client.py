@@ -221,6 +221,11 @@ class RemnawaveClient:
     async def set_status(self, user_id: int, status: str) -> User:
         return await self.update_user(user_id, status=status)
 
+    async def reset_traffic(self, user_id: int) -> None:
+        """Сброс использованного трафика — при продлении тарифа с лимитом,
+        иначе клиент в статусе LIMITED остаётся без доступа после оплаты."""
+        await self._post(f"/api/users/{user_id}/actions/reset-traffic")
+
     # ── Массовые операции ─────────────────────────────────────────────
     async def bulk_extend_expiration(self, user_ids: list[int], days: int) -> None:
         await self._post(
