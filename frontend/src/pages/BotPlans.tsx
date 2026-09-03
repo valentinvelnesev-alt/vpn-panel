@@ -271,6 +271,11 @@ function PlanForm({
             Сквады не загрузились — проверьте подключение к Remnawave.
           </p>
         )}
+        {form.squad_uuids.length === 0 && (
+          <p className="mt-1 text-xs text-danger">
+            Не выбран ни один сквад — купившие этот тариф не получат доступ ни к одной ноде.
+          </p>
+        )}
       </div>
 
       <div className="flex gap-2">

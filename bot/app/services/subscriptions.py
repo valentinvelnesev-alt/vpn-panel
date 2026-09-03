@@ -25,7 +25,52 @@ log = logging.getLogger("bot.subscriptions")
 def client_for(config: Config) -> RemnawaveClient:
     if not config.remnawave_url or not config.remnawave_token:
         raise RemnawaveError("Remnawave не подключена в панели")
-    return RemnawaveClient(config.remnawave_url, config.remnawave_token)
+    return RemnawaveClient(
+        config.remnawave_url, config.remnawave_token, verify_tls=config.remnawave_verify_tls
+    )
+
+
+async def _create_or_adopt(client: RemnawaveClient, **kwargs):
+    """POST /api/users, а при конфликте по username — подхватываем уже
+    существующий аккаунт с этим именем и приводим его к нужным параметрам.
+
+    Имя `tg_<id>` детерминировано: аккаунт мог остаться от прошлой
+    установки бота или быть создан вручную в Remnawave. Раньше такой
+    пользователь получал «попробуйте позже» навсегда."""
+    try:
+        return await client.create_user(**kwargs)
+    except RemnawaveError as exc:
+        if exc.status_code not in (400, 409) or "username" not in str(exc).lower():
+            raise
+        existing = await client.get_users_by_username(kwargs["username"])
+        if not existing:
+            raise
+        remote = existing[0]
+        log.warning("Remnawave: username %s уже занят — подхватываю аккаунт id=%s", kwargs["username"], remote.id)
+        fields: dict = {
+            "expireAt": kwargs["expire_at"].strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "status": "ACTIVE",
+            "activeInternalSquads": kwargs["internal_squad_uuids"],
+            "trafficLimitBytes": kwargs.get("traffic_limit_bytes", 0),
+        }
+        if kwargs.get("hwid_device_limit") is not None:
+            fields["hwidDeviceLimit"] = kwargs["hwid_device_limit"]
+        if kwargs.get("telegram_id") is not None:
+            fields["telegramId"] = kwargs["telegram_id"]
+        if kwargs.get("description"):
+            fields["description"] = kwargs["description"]
+        return await client.update_user(remote.id, **fields)
+
+
+async def _reset_traffic_if_limited(client: RemnawaveClient, user_id: int, plan: PlanView) -> None:
+    """Тариф с лимитом трафика: при оплате счётчик обнуляется, иначе
+    клиент в LIMITED так и останется без доступа."""
+    if plan.traffic_limit_bytes <= 0:
+        return
+    try:
+        await client.reset_traffic(user_id)
+    except RemnawaveError as exc:
+        log.warning("Не удалось сбросить трафик пользователю %s: %s", user_id, exc)
 
 
 async def get_or_create_user(
@@ -142,9 +187,11 @@ async def grant(
                 status="ACTIVE",
                 activeInternalSquads=squad_uuids,
                 hwidDeviceLimit=hwid_limit,
+                trafficLimitBytes=traffic_limit_bytes,
             )
         else:
-            remote = await client.create_user(
+            remote = await _create_or_adopt(
+                client,
                 username=_username_for(user.telegram_id),
                 expire_at=expire_at,
                 internal_squad_uuids=squad_uuids,
@@ -223,7 +270,8 @@ async def grant_bonus_days(
         if user.remnawave_uuid:
             remote = await client.extend_expiration(int(user.remnawave_uuid), expire_at)
         else:
-            remote = await client.create_user(
+            remote = await _create_or_adopt(
+                client,
                 username=_username_for(user.telegram_id),
                 expire_at=expire_at,
                 internal_squad_uuids=config.trial_squad_uuids,
@@ -334,8 +382,10 @@ async def create_subscription(
                 trafficLimitBytes=plan.traffic_limit_bytes,
                 description=f"Выдано ботом: {source} (апгрейд с триала)",
             )
+            await _reset_traffic_if_limited(client, trial.remnawave_id, plan)
         else:
-            remote = await client.create_user(
+            remote = await _create_or_adopt(
+                client,
                 username=_new_key_username(user.telegram_id),
                 expire_at=expire_at,
                 internal_squad_uuids=plan.squad_uuids,
@@ -409,7 +459,9 @@ async def extend_subscription(
             status="ACTIVE",
             activeInternalSquads=plan.squad_uuids,
             hwidDeviceLimit=plan.hwid_limit,
+            trafficLimitBytes=plan.traffic_limit_bytes,
         )
+        await _reset_traffic_if_limited(client, subscription.remnawave_id, plan)
     finally:
         await client.aclose()
 

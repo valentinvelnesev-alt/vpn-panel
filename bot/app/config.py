@@ -120,6 +120,7 @@ class Config:
 
     remnawave_url: str | None = None
     remnawave_token: str | None = None
+    remnawave_verify_tls: bool = True
 
     platega_enabled: bool = False
     platega_merchant_id: str | None = None
@@ -186,6 +187,7 @@ async def load(db: AsyncSession) -> Config:
     keys = [
         "remnawave_url",
         "remnawave_token",
+        "remnawave_verify_tls",
         "payment_platega_enabled",
         "payment_platega_merchant_id",
         "payment_platega_secret",
@@ -232,6 +234,7 @@ async def load(db: AsyncSession) -> Config:
         plans=[plan_view(p) for p in plans],
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),
+        remnawave_verify_tls=raw.get("remnawave_verify_tls") != "false",
         platega_enabled=flag("payment_platega_enabled"),
         platega_merchant_id=raw.get("payment_platega_merchant_id"),
         platega_secret=raw.get("payment_platega_secret"),
