@@ -8,6 +8,7 @@ from shared.db.models import AuditLog
 from app.services import cache
 from app.services.remnawave_provider import Remnawave
 from shared.remnawave import RemnawaveError, User
+from shared.sync import sync_from_remote
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -127,6 +128,22 @@ async def status_counts(admin: CurrentAdmin, client: Remnawave) -> StatusCounts:
     )
 
 
+async def _sync_bot(db, remote: User) -> None:
+    """Панель поменяла пользователя в Remnawave — бот должен увидеть новую
+    дату в меню, напоминаниях и сегментах рассылок, а не старую."""
+    expire_at = remote.expire_at
+    if remote.status.value == "DISABLED":
+        # Отключённый в панели ключ для бота — истёкший: иначе меню
+        # показывало бы «активна», а доступа нет.
+        expire_at = datetime.now(UTC)
+    await sync_from_remote(
+        db,
+        remnawave_id=remote.id,
+        expire_at=expire_at,
+        subscription_url=remote.subscription_url,
+    )
+
+
 class UserUpdateIn(BaseModel):
     expire_at: datetime | None = None
     status: str | None = Field(default=None, pattern="^(ACTIVE|DISABLED)$")
@@ -183,6 +200,7 @@ async def update_user(
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
+    await _sync_bot(db, updated)
     db.add(
         AuditLog(
             admin_id=admin.id,
@@ -227,6 +245,7 @@ async def extend_user(
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
+    await _sync_bot(db, updated)
     db.add(
         AuditLog(
             admin_id=admin.id,
@@ -259,6 +278,7 @@ async def set_status(
     except RemnawaveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
+    await _sync_bot(db, updated)
     db.add(
         AuditLog(
             admin_id=admin.id,

@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import UTC, datetime
 
 from aiogram import Bot, Dispatcher
@@ -22,6 +23,11 @@ from shared.db.session import session
 
 log = logging.getLogger("bot.supervisor")
 
+# Через сколько пробовать снова, если старт или polling упали не из-за
+# токена (сеть, Telegram 5xx). Без этого бот после перезагрузки сервера с
+# медленной сетью висел бы в «ошибке» до ручного нажатия в панели.
+RETRY_DELAYS = (15, 30, 60, 120, 300)
+
 
 class Supervisor:
     def __init__(self) -> None:
@@ -29,8 +35,11 @@ class Supervisor:
         self._workers: list[asyncio.Task] = []
         self._bot: Bot | None = None
         self._dispatcher: Dispatcher | None = None
+        self._storage: RedisStorage | None = None
         self._config: config_module.Config | None = None
         self._lock = asyncio.Lock()
+        self._retry_task: asyncio.Task | None = None
+        self._failures = 0
 
     # ── Состояние в БД ────────────────────────────────────────────────
     async def _set_state(
@@ -48,12 +57,17 @@ class Supervisor:
             for key, value in fields.items():
                 setattr(row, key, value)
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
     # ── Жизненный цикл ────────────────────────────────────────────────
     async def start(self) -> None:
         async with self._lock:
             await self._start_locked()
 
     async def _start_locked(self) -> None:
+        self._cancel_retry()
         await self._stop_locked()
 
         async with session() as db:
@@ -81,14 +95,15 @@ class Supervisor:
         except Exception as exc:  # noqa: BLE001
             await bot.session.close()
             log.exception("Не удалось запустить бота")
-            await self._set_state(BotState.ERROR, f"Не удалось запустить: {exc}")
+            await self._set_state(
+                BotState.ERROR, f"Не удалось запустить: {exc}. Повторю попытку автоматически."
+            )
+            self._schedule_retry()
             return
 
         from app.handlers import build_dispatcher
 
-        storage = RedisStorage.from_url(
-            __import__("os").environ.get("REDIS_URL", "redis://redis:6379/0")
-        )
+        storage = RedisStorage.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"))
         dispatcher = build_dispatcher(storage=storage, config=config)
 
         from app.workers.auto_renewal import worker as auto_renewal_worker
@@ -100,10 +115,12 @@ class Supervisor:
 
         self._bot = bot
         self._dispatcher = dispatcher
+        self._storage = storage
         self._config = config
+        self._failures = 0
         self._task = asyncio.create_task(self._run(bot, dispatcher))
         self._workers = [
-            asyncio.create_task(expiry_worker(bot, config)),
+            asyncio.create_task(expiry_worker(bot)),
             asyncio.create_task(payments_worker()),
             asyncio.create_task(payment_polling_worker()),
             asyncio.create_task(auto_renewal_worker()),
@@ -134,10 +151,34 @@ class Supervisor:
             raise
         except Exception as exc:  # noqa: BLE001
             log.exception("Polling упал")
-            await self._set_state(BotState.ERROR, f"Бот остановился: {exc}")
+            await self._set_state(
+                BotState.ERROR, f"Бот остановился: {exc}. Повторю попытку автоматически."
+            )
+            self._schedule_retry()
+
+    def _schedule_retry(self) -> None:
+        if self._retry_task is not None and not self._retry_task.done():
+            return
+        delay = RETRY_DELAYS[min(self._failures, len(RETRY_DELAYS) - 1)]
+        self._failures += 1
+
+        async def _retry() -> None:
+            await asyncio.sleep(delay)
+            log.info("Повторная попытка запуска бота")
+            await self.start()
+
+        self._retry_task = asyncio.create_task(_retry())
+
+    def _cancel_retry(self) -> None:
+        if self._retry_task is not None and not self._retry_task.done():
+            if self._retry_task is not asyncio.current_task():
+                self._retry_task.cancel()
+        self._retry_task = None
 
     async def stop(self) -> None:
         async with self._lock:
+            self._cancel_retry()
+            self._failures = 0
             await self._stop_locked()
             await self._set_state(BotState.STOPPED)
 
@@ -159,16 +200,42 @@ class Supervisor:
         if self._bot is not None:
             await self._bot.session.close()
             self._bot = None
+        if self._storage is not None:
+            try:
+                await self._storage.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._storage = None
         self._dispatcher = None
         self._config = None
 
     async def reload(self) -> None:
-        """Тарифы или тексты изменились — перечитываем конфиг.
+        """Тарифы, тексты или платёжки изменились — перечитываем конфиг.
 
-        Токен мог остаться прежним, но проще и надёжнее поднять бота
-        заново, чем править состояние работающего диспетчера.
+        Если токен не сменился и бот работает, конфиг подменяется «на лету»
+        в контексте диспетчера: хендлеры получают его аргументом на каждый
+        апдейт, а воркеры перечитывают из БД сами. Полный перезапуск
+        поллинга оставлен только для смены токена или включения после
+        остановки — он ронял бы нажатия пользователей за время рестарта и
+        ловил «Conflict: terminated by other getUpdates request».
         """
-        await self.start()
+        async with self._lock:
+            async with session() as db:
+                config = await config_module.load(db)
+
+            if (
+                self.running
+                and self._dispatcher is not None
+                and self._config is not None
+                and config.can_run
+                and config.token == self._config.token
+            ):
+                self._dispatcher["config"] = config
+                self._config = config
+                log.info("Конфиг обновлён без перезапуска")
+                return
+
+            await self._start_locked()
 
     # ── Приём команд ──────────────────────────────────────────────────
     async def serve(self) -> None:

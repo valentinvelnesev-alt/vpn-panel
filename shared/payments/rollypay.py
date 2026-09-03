@@ -34,7 +34,7 @@ class RollyPayClient:
     ) -> dict:
         """Возвращает тело ответа RollyPay: {"payment_id": ..., "pay_url": ...}."""
         payload = {
-            "amount": f"{int(round(amount_rub))}.00",
+            "amount": f"{amount_rub:.2f}",
             "payment_currency": "RUB",
             "payment_method": "sbp",
             "order_id": order_id,

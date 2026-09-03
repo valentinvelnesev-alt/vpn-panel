@@ -57,7 +57,12 @@ def render(
         placeholder = "{@%s}" % key
         if placeholder in text:
             text = text.replace(placeholder, icon(key, mode, premium))
-    return text.format(**values) if values else text
+    # Подставляем только известные значения, а не str.format: приветствие
+    # правится админом в панели, и любая посторонняя фигурная скобка в нём
+    # роняла бы /start для всех пользователей.
+    for key, value in values.items():
+        text = text.replace("{%s}" % key, str(value))
+    return text
 
 
 # ── Шаблоны ───────────────────────────────────────────────────────────

@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: vpn-panel-bot
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: aiogram>=3.23
+Requires-Dist: sqlalchemy[asyncio]>=2.0.43
+Requires-Dist: asyncpg>=0.30
+Requires-Dist: redis>=6.2
+Requires-Dist: httpx>=0.28
+Requires-Dist: pydantic>=2.11
+Requires-Dist: pydantic-settings>=2.10
+Requires-Dist: cryptography>=45.0

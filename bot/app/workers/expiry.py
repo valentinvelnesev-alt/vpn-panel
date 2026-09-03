@@ -82,6 +82,9 @@ async def run_once(bot: Bot, config: Config) -> int:
             select(BotUser).where(
                 BotUser.expire_at.is_not(None),
                 BotUser.expire_at <= horizon,
+                # Давно истёкшие не перебираем каждый час: «истекла»
+                # отправляется в первые дни, потом смысла нет.
+                BotUser.expire_at >= now - timedelta(days=3),
                 BotUser.has_stopped_bot.is_(False),
                 BotUser.is_blocked.is_(False),
             )
@@ -104,11 +107,15 @@ async def run_once(bot: Bot, config: Config) -> int:
                 expire_at=expire_at,
                 sent_at=now,
             )
-            db.add(marker)
+            # SAVEPOINT: конфликт по уникальному индексу откатывает только
+            # эту отметку. Раньше `db.rollback()` откатывал всю сессию —
+            # вместе с отметками уже отправленных в этом проходе
+            # напоминаний, и через час они уходили повторно.
             try:
-                await db.flush()
+                async with db.begin_nested():
+                    db.add(marker)
+                    await db.flush()
             except IntegrityError:
-                await db.rollback()
                 continue
 
             if await _notify(bot, config, user, window):
@@ -123,9 +130,16 @@ async def run_once(bot: Bot, config: Config) -> int:
     return sent
 
 
-async def worker(bot: Bot, config: Config) -> None:
+async def worker(bot: Bot) -> None:
+    from app import config as config_module
+    from shared.db.session import session as _session
+
     while True:
         try:
+            # Конфиг перечитываем каждый проход: тексты и режим эмодзи
+            # меняются в панели без перезапуска бота.
+            async with _session() as db:
+                config = await config_module.load(db)
             await run_once(bot, config)
         except asyncio.CancelledError:
             raise

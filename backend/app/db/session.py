@@ -4,12 +4,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
+# Настройки пула применимы только к серверным БД; у SQLite (тесты) свой пул,
+# который таких аргументов не принимает.
+_pool_options = (
+    {"pool_size": 10, "max_overflow": 20}
+    if not settings.database_url.startswith("sqlite")
+    else {}
+)
+
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
     echo=False,
+    **_pool_options,
 )
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)

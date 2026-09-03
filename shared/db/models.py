@@ -323,6 +323,10 @@ class BotUser(Base, TimestampMixin):
         Boolean, default=False, nullable=False
     )
 
+    # Персональная скидка на следующую оплату тарифа (из промокода).
+    # Сгорает после первой успешной покупки, как в исходном боте.
+    discount_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     auto_renew_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
@@ -371,6 +375,9 @@ class BotSubscription(Base, TimestampMixin):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
     )
+    # Автопродление с баланса именно этого ключа (по тарифу plan_id) —
+    # переключается пользователем в карточке ключа.
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     user: Mapped[BotUser] = relationship(
         back_populates="subscriptions", foreign_keys=[user_id]

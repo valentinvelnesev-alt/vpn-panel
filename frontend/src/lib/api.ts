@@ -236,6 +236,7 @@ export interface Providers {
   cryptobot_enabled: boolean
   cryptobot_token_masked: string | null
   stars_enabled: boolean
+  webhook_urls: Record<string, string>
 }
 
 export interface PaymentRow {

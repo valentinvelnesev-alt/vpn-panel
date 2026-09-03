@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config
+from app.ui import safe_edit
 from app.states import AdminStates
 from shared import bus
 from shared.db.models import (
@@ -104,7 +105,7 @@ async def cb_admin_close(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_admin_close_to_panel(callback: CallbackQuery, config: Config) -> None:
     if not _is_admin(config, callback.from_user.id):
         return await callback.answer()
-    await callback.message.edit_text(
+    await safe_edit(callback.message, 
         "🛠 <b>Админ-панель</b>\n\nВыберите действие:", reply_markup=_admin_menu_keyboard()
     )
     await callback.answer()
@@ -127,7 +128,7 @@ async def cb_admin_stats(callback: CallbackQuery, config: Config) -> None:
         f"✅ С активной подпиской сейчас: <b>{overview['active_now']}</b>\n\n"
         "Выберите раздел для подробностей:"
     )
-    await callback.message.edit_text(text, reply_markup=_stats_menu_keyboard())
+    await safe_edit(callback.message, text, reply_markup=_stats_menu_keyboard())
     await callback.answer()
 
 
@@ -184,7 +185,7 @@ async def cb_admin_finance(callback: CallbackQuery, config: Config) -> None:
         f"🎟 Промокодов создано: <b>{s['promo_codes_total']}</b>\n"
         f"🎟 Промокодов активировано: <b>{s['promo_activations_total']}</b>"
     )
-    await callback.message.edit_text(text, reply_markup=_back_keyboard())
+    await safe_edit(callback.message, text, reply_markup=_back_keyboard())
     await callback.answer()
 
 
@@ -261,7 +262,7 @@ async def cb_admin_referrals(callback: CallbackQuery, config: Config) -> None:
         f"💵 Комиссий на баланс начислено: <b>{s['commission_count']}</b> "
         f"на <b>{_fmt_rub(s['commission_total'])}</b>"
     )
-    await callback.message.edit_text(text, reply_markup=_back_keyboard())
+    await safe_edit(callback.message, text, reply_markup=_back_keyboard())
     await callback.answer()
 
 
@@ -310,7 +311,7 @@ async def cb_admin_notifications(callback: CallbackQuery, config: Config) -> Non
         lines = "\n".join(f"⏰ Окно «{w}»: <b>{c}</b>" for w, c in by_window) or "Пока пусто"
 
     text = f"🔔 <b>Уведомления об истечении подписки</b>\n\nВсего отправлено: <b>{total}</b>\n\n{lines}"
-    await callback.message.edit_text(text, reply_markup=_back_keyboard())
+    await safe_edit(callback.message, text, reply_markup=_back_keyboard())
     await callback.answer()
 
 
@@ -365,7 +366,7 @@ async def cb_admin_broadcasts(callback: CallbackQuery, config: Config) -> None:
         inline_keyboard=[nav, [InlineKeyboardButton(text="↩️ Назад", callback_data="admin_stats")]]
     )
     text = "📢 <b>Рассылки</b>\n\n" + "\n\n".join(lines)
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -394,7 +395,7 @@ async def cb_admin_broadcast(callback: CallbackQuery, config: Config, state: FSM
     if not _is_admin(config, callback.from_user.id):
         return await callback.answer()
     await state.set_state(AdminStates.broadcast_text)
-    await callback.message.edit_text(
+    await safe_edit(callback.message, 
         "📢 Введите текст рассылки (можно с HTML-разметкой):",
         reply_markup=_cancel_keyboard(),
     )
@@ -441,7 +442,7 @@ async def cb_broadcast_segment(callback: CallbackQuery, config: Config, state: F
             [InlineKeyboardButton(text="Отмена", callback_data="admin_close_to_panel")],
         ]
     )
-    await callback.message.edit_text(
+    await safe_edit(callback.message, 
         f"Проверьте рассылку:\n\nСегмент: <b>{_SEGMENT_LABEL[segment]}</b>\n\n{preview}",
         reply_markup=confirm_kb,
     )
@@ -475,7 +476,7 @@ async def cb_broadcast_confirm(callback: CallbackQuery, config: Config, state: F
     # сохранённую запись (та же гонка, что чинили в веб-панели).
     await bus.publish(bus.EVENT_BROADCAST_READY)
 
-    await callback.message.edit_text(
+    await safe_edit(callback.message, 
         "✅ Рассылка запущена — воркер отправит её в ближайшие секунды.",
         reply_markup=_admin_menu_keyboard(),
     )
@@ -488,7 +489,7 @@ async def cb_admin_promo_create(callback: CallbackQuery, config: Config, state: 
     if not _is_admin(config, callback.from_user.id):
         return await callback.answer()
     await state.set_state(AdminStates.promo_code)
-    await callback.message.edit_text(
+    await safe_edit(callback.message, 
         "🎟 Введите код промокода (латиница и цифры, например SUMMER25):",
         reply_markup=_cancel_keyboard(),
     )
@@ -583,5 +584,5 @@ async def cb_admin_promo_list(callback: CallbackQuery, config: Config) -> None:
             lines.append(f"{status_icon} <code>{p.code}</code> — {p.bonus_days} дн., {p.discount_percent}% · {limit}")
         text = "📋 <b>Промокоды</b>\n\n" + "\n".join(lines)
 
-    await callback.message.edit_text(text, reply_markup=_back_keyboard("admin_close_to_panel"))
+    await safe_edit(callback.message, text, reply_markup=_back_keyboard("admin_close_to_panel"))
     await callback.answer()
