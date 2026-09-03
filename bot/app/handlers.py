@@ -24,7 +24,7 @@ from sqlalchemy import func, select
 
 from app import keyboards, texts
 from app.config import Config
-from app.services import payment_flow, promo as promo_service, referral, stars
+from app.services import payment_check, payment_flow, promo as promo_service, referral, stars
 from app.services import subscriptions as subs
 from app.services import wallet
 from app.states import UserStates
@@ -506,6 +506,7 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 
         builder = InlineKeyboardBuilder()
         builder.button(text="Оплатить", url=pay_url)
+        builder.button(text="🔄 Проверить оплату", callback_data=f"checkpay:{payment.id}")
         builder.button(text="‹ Назад", callback_data="menu")
         builder.adjust(1)
         await callback.message.edit_text(
@@ -517,6 +518,25 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             reply_markup=keyboards.back_to_menu(),
         )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("checkpay:"))
+async def cb_check_payment(callback: CallbackQuery, config: Config) -> None:
+    payment_id = int(callback.data.split(":", 1)[1])
+    try:
+        paid = await payment_check.check_and_apply(payment_id)
+    except Exception:  # noqa: BLE001
+        await callback.answer("Не удалось проверить оплату, попробуйте позже", show_alert=True)
+        return
+
+    if paid:
+        await callback.answer("Оплата подтверждена!", show_alert=True)
+        await callback.message.edit_text(
+            t(config, "{@check} Оплата подтверждена, подписка выдана"),
+            reply_markup=keyboards.back_to_menu(),
+        )
+    else:
+        await callback.answer("Оплата пока не поступила, попробуйте чуть позже", show_alert=True)
 
 
 @router.pre_checkout_query()
