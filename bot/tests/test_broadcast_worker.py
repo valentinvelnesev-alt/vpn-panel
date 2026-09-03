@@ -149,3 +149,60 @@ async def test_send_with_buttons_and_photo(db, monkeypatch) -> None:
 
 async def test_run_once_skips_without_token() -> None:
     assert await broadcast_worker.run_once(None) is False
+
+
+# ── Возобновление после падения ───────────────────────────────────────
+async def test_stale_sending_broadcast_resumes_from_cursor(db, monkeypatch) -> None:
+    """Контейнер упал на середине: рассылка в sending, heartbeat старый,
+    курсор на втором получателе. Продолжаем с третьего — без дублей."""
+    for tg_id in (1, 2, 3, 4):
+        db.add(BotUser(telegram_id=tg_id))
+    await db.commit()
+    users = {
+        u.telegram_id: u.id
+        for u in (await db.execute(__import__("sqlalchemy").select(BotUser))).scalars()
+    }
+
+    broadcast_id = await _make_broadcast(
+        db,
+        scheduled_at=datetime.now(UTC) - timedelta(minutes=10),
+        status=BroadcastStatus.SENDING,
+        started_at=datetime.now(UTC) - timedelta(minutes=10),
+        heartbeat_at=datetime.now(UTC) - timedelta(minutes=5),
+        total_recipients=4,
+        sent_count=2,
+        cursor_user_id=users[2],
+    )
+
+    sent_to: list[int] = []
+
+    async def fake_send_message(self, chat_id, text, **kwargs):
+        sent_to.append(chat_id)
+
+    async def fake_close(self):
+        return None
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr("aiogram.client.session.aiohttp.AiohttpSession.close", fake_close)
+
+    assert await broadcast_worker._claim_due_broadcast() == broadcast_id
+    await broadcast_worker._send(broadcast_id, "1:fake-token")
+
+    updated = await db.get(Broadcast, broadcast_id)
+    await db.refresh(updated)
+    assert sorted(sent_to) == [3, 4]
+    assert updated.status == BroadcastStatus.COMPLETED
+    assert updated.sent_count == 4
+    assert updated.total_recipients == 4
+
+
+async def test_active_sending_broadcast_is_not_reclaimed(db) -> None:
+    """Живая рассылка (свежий heartbeat) не должна подхватываться вторично."""
+    await _make_broadcast(
+        db,
+        scheduled_at=datetime.now(UTC) - timedelta(minutes=10),
+        status=BroadcastStatus.SENDING,
+        started_at=datetime.now(UTC) - timedelta(minutes=10),
+        heartbeat_at=datetime.now(UTC),
+    )
+    assert await broadcast_worker._claim_due_broadcast() is None

@@ -233,6 +233,7 @@ export interface Providers {
   platega_secret_masked: string | null
   rollypay_enabled: boolean
   rollypay_api_key_masked: string | null
+  rollypay_signing_secret_masked: string | null
   cryptobot_enabled: boolean
   cryptobot_token_masked: string | null
   stars_enabled: boolean
@@ -401,7 +402,7 @@ export const panel = {
   providers: () => api<Providers>('/payments/providers'),
   savePlatega: (json: { enabled: boolean; merchant_id: string; secret: string }) =>
     api<Providers>('/payments/providers/platega', { method: 'PUT', json }),
-  saveRollyPay: (json: { enabled: boolean; api_key: string }) =>
+  saveRollyPay: (json: { enabled: boolean; api_key: string; signing_secret: string }) =>
     api<Providers>('/payments/providers/rollypay', { method: 'PUT', json }),
   saveCryptoBot: (json: { enabled: boolean; token: string }) =>
     api<Providers>('/payments/providers/cryptobot', { method: 'PUT', json }),

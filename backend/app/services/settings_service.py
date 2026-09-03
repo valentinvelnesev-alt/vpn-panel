@@ -23,6 +23,9 @@ PLATEGA_SECRET: Final = "payment_platega_secret"
 
 ROLLYPAY_ENABLED: Final = "payment_rollypay_enabled"
 ROLLYPAY_API_KEY: Final = "payment_rollypay_api_key"
+# Секрет подписи вебхуков RollyPay (X-Signature). Необязателен: без него
+# колбэк принимается, а подтверждение всё равно идёт перезапросом статуса.
+ROLLYPAY_SIGNING_SECRET: Final = "payment_rollypay_signing_secret"
 
 CRYPTOBOT_ENABLED: Final = "payment_cryptobot_enabled"
 CRYPTOBOT_TOKEN: Final = "payment_cryptobot_token"
@@ -30,7 +33,13 @@ CRYPTOBOT_TOKEN: Final = "payment_cryptobot_token"
 STARS_ENABLED: Final = "payment_stars_enabled"
 
 SECRET_KEYS: Final = frozenset(
-    {REMNAWAVE_TOKEN, PLATEGA_SECRET, ROLLYPAY_API_KEY, CRYPTOBOT_TOKEN}
+    {
+        REMNAWAVE_TOKEN,
+        PLATEGA_SECRET,
+        ROLLYPAY_API_KEY,
+        ROLLYPAY_SIGNING_SECRET,
+        CRYPTOBOT_TOKEN,
+    }
 )
 
 

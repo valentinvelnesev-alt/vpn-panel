@@ -96,6 +96,8 @@ async def overview(admin: CurrentAdmin, db: DbSession) -> AnalyticsOverview:
                 func.sum(Purchase.amount_kopeks) / 100.0,
             )
             .join(Purchase, Purchase.plan_id == Plan.id)
+            # Триал, бонусные дни и ручная выдача — не покупки тарифа.
+            .where(Purchase.amount_kopeks > 0)
             .group_by(Plan.id, Plan.title)
             .order_by(func.count(Purchase.id).desc())
             .limit(10)

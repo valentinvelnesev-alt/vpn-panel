@@ -20,14 +20,20 @@ def client():
 # ── Провайдеры ────────────────────────────────────────────────────────
 def test_providers_start_disabled(client: TestClient) -> None:
     body = client.get("/api/v1/payments/providers").json()
+    webhook_urls = body.pop("webhook_urls")
     assert body == {
         "platega_enabled": False,
         "platega_merchant_id": None,
         "platega_secret_masked": None,
+        "rollypay_enabled": False,
+        "rollypay_api_key_masked": None,
+        "rollypay_signing_secret_masked": None,
         "cryptobot_enabled": False,
         "cryptobot_token_masked": None,
         "stars_enabled": False,
     }
+    # Адреса колбэков собираются от публичного адреса панели.
+    assert webhook_urls["rollypay"].endswith("/api/v1/webhooks/rollypay")
 
 
 def test_save_platega_masks_secret(client: TestClient) -> None:

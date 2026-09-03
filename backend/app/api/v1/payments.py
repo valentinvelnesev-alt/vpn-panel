@@ -19,6 +19,7 @@ class ProvidersOut(BaseModel):
     platega_secret_masked: str | None
     rollypay_enabled: bool
     rollypay_api_key_masked: str | None
+    rollypay_signing_secret_masked: str | None = None
     cryptobot_enabled: bool
     cryptobot_token_masked: str | None
     stars_enabled: bool
@@ -49,6 +50,7 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         cfg.PLATEGA_SECRET,
         cfg.ROLLYPAY_ENABLED,
         cfg.ROLLYPAY_API_KEY,
+        cfg.ROLLYPAY_SIGNING_SECRET,
         cfg.CRYPTOBOT_ENABLED,
         cfg.CRYPTOBOT_TOKEN,
         cfg.STARS_ENABLED,
@@ -62,6 +64,9 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         rollypay_enabled=values[cfg.ROLLYPAY_ENABLED] == "true",
         rollypay_api_key_masked=mask(values[cfg.ROLLYPAY_API_KEY])
         if values[cfg.ROLLYPAY_API_KEY]
+        else None,
+        rollypay_signing_secret_masked=mask(values[cfg.ROLLYPAY_SIGNING_SECRET])
+        if values[cfg.ROLLYPAY_SIGNING_SECRET]
         else None,
         cryptobot_enabled=values[cfg.CRYPTOBOT_ENABLED] == "true",
         cryptobot_token_masked=mask(values[cfg.CRYPTOBOT_TOKEN])
@@ -113,6 +118,9 @@ class RollyPayIn(BaseModel):
     enabled: bool
     # Пусто = оставить прежний ключ — так же, как секреты остальных провайдеров.
     api_key: str = Field(default="", max_length=256)
+    # Секрет подписи вебхуков (кабинет RollyPay → касса → Webhook secret).
+    # Пусто — не менять; с ним колбэки без валидной подписи отбрасываются.
+    signing_secret: str = Field(default="", max_length=256)
 
 
 @router.put("/providers/rollypay", response_model=ProvidersOut)
@@ -127,6 +135,8 @@ async def save_rollypay(
     await cfg.set_(db, cfg.ROLLYPAY_ENABLED, "true" if data.enabled else "false")
     if data.api_key:
         await cfg.set_(db, cfg.ROLLYPAY_API_KEY, data.api_key)
+    if data.signing_secret:
+        await cfg.set_(db, cfg.ROLLYPAY_SIGNING_SECRET, data.signing_secret)
     db.add(
         AuditLog(
             admin_id=admin.id,

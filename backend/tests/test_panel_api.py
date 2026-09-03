@@ -36,7 +36,8 @@ NODE = {
 }
 
 USER = {
-    "uuid": "u-1",
+    "id": 1,
+    "shortUuid": "u-1",
     "username": "client01",
     "status": "ACTIVE",
     "expireAt": "2027-01-01T00:00:00.000Z",
@@ -80,9 +81,10 @@ def fake_remnawave(request: httpx.Request) -> httpx.Response:
         "/api/system/stats": STATS,
         "/api/nodes": [NODE],
         "/api/users": {"users": [USER], "total": 1},
-        "/api/users/u-1": USER,
-        "/api/users/by-telegram-id/12345": [USER],
-        "/api/hwid/devices/u-1": {
+        "/api/users/1": USER,
+        # API >= 2.9: поиск по telegramId идёт через /api/users/stream
+        "/api/users/stream": {"users": [USER], "total": 1},
+        "/api/hwid/devices/1": {
             "total": 1,
             "devices": [{"hwid": "h1", "platform": "iOS", "deviceModel": "iPhone"}],
         },
@@ -194,6 +196,7 @@ def test_users_list_and_search(client: TestClient) -> None:
 
     found = client.get("/api/v1/users", params={"search": "12345"}).json()
     assert found["total"] == 1
+    assert found["users"][0]["id"] == 1
 
     missing = client.get("/api/v1/users", params={"search": "nobody"}).json()
     assert missing == {"users": [], "total": 0}
@@ -201,7 +204,7 @@ def test_users_list_and_search(client: TestClient) -> None:
 
 def test_extend_user_from_current_expiry(client: TestClient) -> None:
     configure(client)
-    r = client.post("/api/v1/users/u-1/extend", json={"days": 30})
+    r = client.post("/api/v1/users/1/extend", json={"days": 30})
     assert r.status_code == 200
     expire = datetime.fromisoformat(r.json()["expire_at"])
     # Исходная дата 2027-01-01 плюс 30 дней.
@@ -210,9 +213,9 @@ def test_extend_user_from_current_expiry(client: TestClient) -> None:
 
 def test_devices(client: TestClient) -> None:
     configure(client)
-    devices = client.get("/api/v1/users/u-1/devices").json()
+    devices = client.get("/api/v1/users/1/devices").json()
     assert devices[0]["platform"] == "iOS"
-    assert client.delete("/api/v1/users/u-1/devices/h1").status_code == 204
+    assert client.delete("/api/v1/users/1/devices/h1").status_code == 204
 
 
 def test_requires_authentication() -> None:
@@ -231,7 +234,7 @@ def test_status_counts(client: TestClient) -> None:
 def test_update_user_sends_only_changed_fields(client: TestClient) -> None:
     configure(client)
     r = client.patch(
-        "/api/v1/users/u-1",
+        "/api/v1/users/1",
         json={"tag": "VIP", "hwid_device_limit": 5, "description": "постоянный клиент"},
     )
     assert r.status_code == 200
@@ -243,19 +246,19 @@ def test_update_user_sends_only_changed_fields(client: TestClient) -> None:
 
 def test_update_user_rejects_empty_payload(client: TestClient) -> None:
     configure(client)
-    assert client.patch("/api/v1/users/u-1", json={}).status_code == 422
+    assert client.patch("/api/v1/users/1", json={}).status_code == 422
 
 
 def test_update_user_validates_status(client: TestClient) -> None:
     configure(client)
-    assert client.patch("/api/v1/users/u-1", json={"status": "HACKED"}).status_code == 422
+    assert client.patch("/api/v1/users/1", json={"status": "HACKED"}).status_code == 422
 
 
 def test_update_user_squads_sends_uuids(client: TestClient) -> None:
     """В запрос сквады уходят UUID-строками (как требует спека 2.8.1),
     а в ответе разбираются как объекты."""
     configure(client)
-    r = client.patch("/api/v1/users/u-1", json={"squad_uuids": ["s-9"]})
+    r = client.patch("/api/v1/users/1", json={"squad_uuids": ["s-9"]})
     assert r.status_code == 200
     assert r.json()["squads"] == [{"uuid": "s-9", "name": "Main"}]
 
@@ -276,4 +279,4 @@ def test_unexpected_remnawave_response_is_502(client: TestClient, monkeypatch) -
 
     monkeypatch.setattr(rw.RemnawaveClient, "__init__", broken)
     configure(client)
-    assert client.get("/api/v1/users/u-1").status_code == 502
+    assert client.get("/api/v1/users/1").status_code == 502

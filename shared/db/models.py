@@ -637,6 +637,14 @@ class Broadcast(Base):
     total_recipients: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Возобновление после падения контейнера: id последнего обработанного
+    # получателя и время последней отправки. Рассылка в статусе sending без
+    # свежего heartbeat подхватывается воркером с места остановки — без
+    # дублей тем, кто уже получил сообщение.
+    cursor_user_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
     created_by_admin_id: Mapped[int | None] = mapped_column(
         ForeignKey("admins.id", ondelete="SET NULL"), default=None
