@@ -3,6 +3,12 @@
 Публичный API `https://app.platega.io` — не привязан к конкретному проекту,
 в отличие от старого бота, где сюда же были вписаны чужие мерчант-данные.
 
+Формат тела запроса проверен на боевом мерчанте: сумма идёт вложенным
+объектом `paymentDetails`, а не полем `amount` верхнего уровня — иначе
+Platega отвечает 400 «The PaymentDetails field is required». Идентификатор
+транзакции в ответе называется `transactionId`, ссылка на оплату —
+`redirect` (у эндпоинта статуса тот же идентификатор приходит как `id`).
+
 Статус платежа из вебхука не считается доверенным сам по себе: после
 получения колбэка мы всегда перезапрашиваем транзакцию через `get_transaction`
 своими же учётными данными и верим только этому ответу. Это надёжнее, чем
@@ -10,9 +16,14 @@
 такой ответ может только тот, у кого есть наш секрет мерчанта.
 """
 
+from typing import Any
+
 import httpx
 
 BASE_URL = "https://app.platega.io"
+
+# Способ оплаты: 2 — СБП QR.
+PAYMENT_METHOD_SBP = 2
 
 
 class PlategaError(Exception):
@@ -34,14 +45,21 @@ class PlategaClient:
 
     async def create_transaction(
         self, *, amount_rub: float, description: str, order_id: str, return_url: str
-    ) -> dict:
-        """Возвращает {"id": ..., "redirectUrl": ...} — ссылку показываем пользователю."""
+    ) -> dict[str, Any]:
+        """Возвращает тело ответа Platega с `transactionId` и `redirect`.
+
+        Комиссию Platega добавляет к сумме сама (её платит клиент), поэтому
+        здесь передаётся именно та сумма, которую должен получить мерчант.
+        """
         payload = {
-            "paymentMethod": 2,  # СБП
-            "amount": round(amount_rub, 2),
+            "paymentMethod": PAYMENT_METHOD_SBP,
+            "paymentDetails": {"amount": round(amount_rub, 2), "currency": "RUB"},
             "description": description,
-            "orderId": order_id,
-            "returnUrl": return_url,
+            # Ключи возврата называются именно так — `returnUrl` Platega игнорирует.
+            "return": return_url,
+            "failedUrl": return_url,
+            # Свой идентификатор заказа: виден в ответе статуса как `payload`.
+            "payload": order_id,
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
@@ -51,17 +69,33 @@ class PlategaClient:
             )
         if response.status_code >= 400:
             raise PlategaError(f"Platega вернула {response.status_code}: {response.text[:200]}")
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise PlategaError("Platega вернула не JSON") from exc
 
-    async def get_transaction(self, transaction_id: str) -> dict:
+    async def get_transaction(self, transaction_id: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(
                 f"{BASE_URL}/transaction/{transaction_id}", headers=self._headers()
             )
         if response.status_code >= 400:
             raise PlategaError(f"Platega вернула {response.status_code}: {response.text[:200]}")
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise PlategaError("Platega вернула не JSON") from exc
 
     @staticmethod
-    def is_paid(transaction: dict) -> bool:
+    def transaction_id(body: dict[str, Any]) -> str:
+        """id транзакции из ответа. `id` — запасной ключ: так его называет
+        эндпоинт статуса."""
+        return str(body.get("transactionId") or body.get("id") or "")
+
+    @staticmethod
+    def pay_url(body: dict[str, Any]) -> str:
+        return body.get("redirect") or body.get("redirectUrl") or body.get("url") or ""
+
+    @staticmethod
+    def is_paid(transaction: dict[str, Any]) -> bool:
         return str(transaction.get("status", "")).upper() in {"CONFIRMED", "PAID", "SUCCESS"}

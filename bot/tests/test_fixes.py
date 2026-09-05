@@ -458,3 +458,57 @@ async def test_renewal_without_traffic_limit_does_not_reset(db, config, remote) 
     sub = await subs.create_subscription(db, config, user, PLAN, source="wallet")
     await subs.extend_subscription(db, config, sub, PLAN)
     assert not any("reset-traffic" in m for m, _ in remote)
+
+
+# ── Platega: формат запроса и разбор ответа ───────────────────────────
+async def test_platega_request_shape_matches_live_api(db, config, monkeypatch) -> None:
+    """Platega принимает сумму только вложенным `paymentDetails`, а ответ
+    отдаёт как `transactionId`/`redirect`. Плоский `amount` и чтение `id`
+    давали 400 и «платёжный сервис не отвечает»."""
+    from shared.payments import platega as platega_module
+
+    captured: dict = {}
+
+    async def fake_post(self, url, json=None, headers=None):
+        captured["url"] = url
+        captured["body"] = json
+        return httpx.Response(
+            200,
+            json={
+                "paymentMethod": "SBPQR",
+                "transactionId": "tx-live-1",
+                "redirect": "https://pay.platega.io?id=tx-live-1",
+                "status": "PENDING",
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    user = await subs.get_or_create_user(db, 777)
+    await db.flush()
+    payment, pay_url = await payment_flow.create_external_payment(
+        db, config, user, purpose=PaymentPurpose.PLAN, amount_kopeks=39900,
+        provider=PaymentProvider.PLATEGA, plan_id=1, description="Оплата тарифа",
+    )
+
+    assert captured["url"].endswith("/transaction/process")
+    assert captured["body"]["paymentDetails"] == {"amount": 399.0, "currency": "RUB"}
+    assert "amount" not in captured["body"]
+    assert captured["body"]["return"] and captured["body"]["failedUrl"]
+    assert captured["body"]["payload"] == str(payment.id)
+    assert payment.external_id == "tx-live-1"
+    assert pay_url == "https://pay.platega.io?id=tx-live-1"
+
+
+def test_platega_response_parsing_and_status() -> None:
+    from shared.payments.platega import PlategaClient
+
+    created = {"transactionId": "a", "redirect": "https://pay"}
+    assert PlategaClient.transaction_id(created) == "a"
+    assert PlategaClient.pay_url(created) == "https://pay"
+    # Эндпоинт статуса называет тот же идентификатор `id`.
+    assert PlategaClient.transaction_id({"id": "b", "status": "PENDING"}) == "b"
+    assert PlategaClient.is_paid({"status": "CONFIRMED"}) is True
+    assert PlategaClient.is_paid({"status": "PENDING"}) is False
+    assert PlategaClient.is_paid({"status": "CANCELED"}) is False
