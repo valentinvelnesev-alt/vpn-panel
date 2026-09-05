@@ -512,3 +512,79 @@ def test_platega_response_parsing_and_status() -> None:
     assert PlategaClient.is_paid({"status": "CONFIRMED"}) is True
     assert PlategaClient.is_paid({"status": "PENDING"}) is False
     assert PlategaClient.is_paid({"status": "CANCELED"}) is False
+
+
+# ── Пробный период ────────────────────────────────────────────────────
+async def test_trial_blocked_when_user_already_has_subscription(db, config, remote) -> None:
+    """Купивший подписку не может «попробовать бесплатно»: раньше это
+    продлевало его оплаченный ключ и сбрасывало сквады с лимитом устройств
+    на пробные."""
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="rollypay")
+    await db.commit()
+    before_expire, before_calls = sub.expire_at, len(remote)
+
+    assert await subs.trial_available(db, config, user) is False
+    with pytest.raises(subs.TrialUnavailable):
+        await subs.grant_trial(db, config, user)
+
+    await db.refresh(sub)
+    # SQLite отдаёт дату без таймзоны — сравниваем момент времени.
+    assert sub.expire_at.replace(tzinfo=None) == before_expire.replace(tzinfo=None)
+    assert len(remote) == before_calls  # в Remnawave ничего не ушло
+    assert user.trial_used is False
+
+
+async def test_trial_is_available_for_new_user_only_once(db, config, remote) -> None:
+    user = await subs.get_or_create_user(db, 777)
+    assert await subs.trial_available(db, config, user) is True
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    assert user.trial_used is True
+    assert await subs.trial_available(db, config, user) is False
+    with pytest.raises(subs.TrialUnavailable):
+        await subs.grant_trial(db, config, user)
+
+
+async def test_trial_creates_its_own_key_not_touching_others(db, config, remote) -> None:
+    """Пробный ключ создаётся отдельным аккаунтом, а не патчем чужого."""
+    user = await subs.get_or_create_user(db, 777)
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    rows = await subs.list_subscriptions(db, user)
+    assert len(rows) == 1 and rows[0].is_trial is True and rows[0].plan_id is None
+    assert remote[-1][0] == "POST /api/users"
+    assert remote[-1][1]["activeInternalSquads"] == ["squad-trial"]
+    assert remote[-1][1]["hwidDeviceLimit"] == 2
+
+
+async def test_paid_subscription_keeps_name_after_plan_deleted(db, config, remote) -> None:
+    """Админ удалил тариф — plan_id обнуляется по FK, но подписка не должна
+    превращаться в «Пробный период»."""
+    from app.handlers import _plan_titles
+
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="rollypay")
+    await db.flush()
+    assert sub.title == "Месяц" and sub.is_trial is False
+
+    sub.plan_id = None  # как делает ON DELETE SET NULL
+    await db.flush()
+    assert (await _plan_titles(db, [sub]))[sub.id] == "Месяц"
+
+
+async def test_trial_key_is_named_trial(db, config, remote) -> None:
+    from app.handlers import _plan_titles
+
+    user = await subs.get_or_create_user(db, 777)
+    await subs.grant_trial(db, config, user)
+    rows = await subs.list_subscriptions(db, user)
+    assert (await _plan_titles(db, rows))[rows[0].id] == "Пробный период"
+
+
+async def test_purchase_history_keeps_plan_name(db, config, remote) -> None:
+    user = await subs.get_or_create_user(db, 777)
+    await subs.create_subscription(db, config, user, PLAN, source="rollypay")
+    await db.flush()
+    purchase = await db.scalar(select(Purchase).where(Purchase.user_id == user.id))
+    assert purchase.plan_title == "Месяц"
