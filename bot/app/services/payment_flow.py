@@ -5,6 +5,7 @@
 и получаем у провайдера ссылку/счёт, на которую отправить пользователя.
 """
 
+import logging
 from uuid import uuid4
 
 import httpx
@@ -16,6 +17,8 @@ from shared.payments.cryptobot import CryptoBotClient, CryptoBotError
 from shared.payments.currency import CurrencyError, rub_to_crypto
 from shared.payments.platega import PlategaClient, PlategaError
 from shared.payments.rollypay import RollyPayClient, RollyPayError
+
+log = logging.getLogger("bot.payment_flow")
 
 
 class PaymentFlowError(Exception):
@@ -83,6 +86,10 @@ async def create_external_payment(
             if not pay_url:
                 raise PaymentFlowError("Провайдер не вернул ссылку на оплату")
     except (PlategaError, RollyPayError, CryptoBotError, CurrencyError, httpx.HTTPError) as exc:
+        # Пользователю показывается общая фраза, но в лог пишем ответ
+        # провайдера целиком — без этого причина отказа (например,
+        # невалидное тело запроса) не видна вообще нигде.
+        log.error("Провайдер %s не принял платёж: %s", provider, exc)
         raise PaymentFlowError(
             "Платёжный сервис не отвечает, попробуйте позже или другой способ"
         ) from exc
@@ -105,10 +112,11 @@ async def _create_at_provider(
             order_id=str(payment.id),
             return_url="https://t.me",
         )
-        if not result.get("id"):
-            raise PlategaError("в ответе нет id транзакции")
-        payment.external_id = str(result["id"])
-        return result.get("redirectUrl") or result.get("url") or ""
+        external = PlategaClient.transaction_id(result)
+        if not external:
+            raise PlategaError(f"в ответе нет id транзакции: {result}")
+        payment.external_id = external
+        return PlategaClient.pay_url(result)
 
     if provider is PaymentProvider.ROLLYPAY:
         client = RollyPayClient(config.rollypay_api_key)
