@@ -151,14 +151,22 @@ async def _user_discount(db, telegram_id: int) -> int:
 
 
 async def _plan_titles(db, subscriptions: list[BotSubscription]) -> dict[int, str]:
-    """id ключа → человекочитаемое имя (название тарифа или «Пробный»)."""
-    plan_ids = {s.plan_id for s in subscriptions if s.plan_id is not None}
+    """id ключа → человекочитаемое имя.
+
+    Имя берётся из снимка в самой подписке: тариф могли переименовать или
+    удалить (тогда plan_id обнуляется), а ключ у клиента остаётся. «Пробный
+    период» показывается только по явному признаку, иначе оплаченная
+    подписка с удалённым тарифом выглядела бы пробной.
+    """
+    missing = {s.plan_id for s in subscriptions if s.plan_id and not s.title}
     titles: dict[int, str] = {}
-    if plan_ids:
-        rows = await db.scalars(select(Plan).where(Plan.id.in_(plan_ids)))
+    if missing:
+        rows = await db.scalars(select(Plan).where(Plan.id.in_(missing)))
         titles = {p.id: p.title for p in rows}
     return {
-        s.id: titles.get(s.plan_id, "Подписка") if s.plan_id else "Пробный период"
+        s.id: s.title
+        or titles.get(s.plan_id)
+        or ("Пробный период" if s.is_trial else "Подписка")
         for s in subscriptions
     }
 
@@ -190,7 +198,8 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
             first_name=target.from_user.first_name,
             language_code=target.from_user.language_code,
         )
-        trial_available = config.trial_enabled and not user.trial_used
+        # Пробный период предлагается только тем, у кого ещё нет ключей.
+        trial_available = await subs.trial_available(db, config, user)
 
     text = t(config, config.welcome_text or texts.WELCOME_DEFAULT, brand=config.brand)
     markup = keyboards.main_menu(config, trial_available=trial_available)
@@ -298,11 +307,11 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        if user.trial_used:
-            await callback.answer("Пробный период уже использован", show_alert=True)
-            return
         try:
             user = await subs.grant_trial(db, config, user)
+        except subs.TrialUnavailable as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
         except RemnawaveError as exc:
             log.error("Не удалось выдать триал: %s", exc)
             await callback.answer(
@@ -1154,7 +1163,7 @@ async def cb_purchase_history(callback: CallbackQuery, config: Config) -> None:
                 .limit(15)
             )
         )
-        plan_ids = {p.plan_id for p in rows if p.plan_id}
+        plan_ids = {p.plan_id for p in rows if p.plan_id and not p.plan_title}
         titles = {}
         if plan_ids:
             plans = await db.scalars(select(Plan).where(Plan.id.in_(plan_ids)))
@@ -1165,7 +1174,7 @@ async def cb_purchase_history(callback: CallbackQuery, config: Config) -> None:
     else:
         lines = []
         for p in rows:
-            what = titles.get(p.plan_id) if p.plan_id else None
+            what = p.plan_title or (titles.get(p.plan_id) if p.plan_id else None)
             what = what or f"+{_plural(p.days, 'день', 'дня', 'дней')}"
             how = _SOURCE_LABEL.get(p.source, p.source)
             amount = f" — {format_rub(p.amount_kopeks)}" if p.amount_kopeks else ""

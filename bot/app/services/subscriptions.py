@@ -8,7 +8,7 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,10 @@ from shared.remnawave import RemnawaveClient, RemnawaveError
 from shared.sync import refresh_user_summary
 
 log = logging.getLogger("bot.subscriptions")
+
+
+class TrialUnavailable(Exception):
+    """Причина отказа в пробном периоде — показывается пользователю как есть."""
 
 
 def client_for(config: Config) -> RemnawaveClient:
@@ -142,6 +146,8 @@ async def _mirror_subscription(
     subscription_url: str | None,
     expire_at: datetime | None,
     plan_id: int | None,
+    title: str | None = None,
+    is_trial: bool | None = None,
 ) -> BotSubscription:
     """Заводит или обновляет строку `bot_subscriptions` для основной
     подписки пользователя (той, что также лежит в BotUser.remnawave_uuid).
@@ -158,6 +164,10 @@ async def _mirror_subscription(
     row.expire_at = expire_at
     if plan_id is not None:
         row.plan_id = plan_id
+    if title is not None:
+        row.title = title
+    if is_trial is not None:
+        row.is_trial = is_trial
     await db.flush()
     return row
 
@@ -173,6 +183,7 @@ async def grant(
     traffic_limit_bytes: int = 0,
     source: str,
     plan_id: int | None = None,
+    plan_title: str | None = None,
     amount_kopeks: int = 0,
 ) -> BotUser:
     """Выдаёт или продлевает доступ на основном ключе и записывает факт выдачи."""
@@ -215,12 +226,15 @@ async def grant(
         subscription_url=user.subscription_url,
         expire_at=user.expire_at,
         plan_id=plan_id,
+        title=plan_title,
+        is_trial=False if plan_id is not None else None,
     )
 
     db.add(
         Purchase(
             user_id=user.id,
             plan_id=plan_id,
+            plan_title=plan_title,
             subscription_id=mirrored.id,
             days=days,
             amount_kopeks=amount_kopeks,
@@ -235,20 +249,82 @@ async def grant(
     return user
 
 
+async def subscription_count(db: AsyncSession, user: BotUser) -> int:
+    return (
+        await db.scalar(
+            select(func.count())
+            .select_from(BotSubscription)
+            .where(BotSubscription.user_id == user.id)
+        )
+    ) or 0
+
+
+async def trial_available(db: AsyncSession, config: Config, user: BotUser) -> bool:
+    """Пробный период — только для тех, у кого ещё нет ни одного ключа.
+
+    Раньше проверялся лишь флаг `trial_used`, поэтому купивший подписку
+    мог нажать «Попробовать бесплатно» — и пробный период правил его
+    оплаченный ключ: добавлял себе дни и сбрасывал сквады с лимитом
+    устройств на пробные.
+    """
+    if not config.trial_enabled or user.trial_used:
+        return False
+    return await subscription_count(db, user) == 0
+
+
 async def grant_trial(db: AsyncSession, config: Config, user: BotUser) -> BotUser:
+    """Заводит ОТДЕЛЬНЫЙ пробный ключ. Существующие ключи не трогает."""
+    if not config.trial_enabled:
+        raise TrialUnavailable("Пробный период сейчас недоступен")
+    if user.trial_used:
+        raise TrialUnavailable("Пробный период уже использован")
+    if await subscription_count(db, user):
+        raise TrialUnavailable(
+            "Пробный период доступен только до первой подписки"
+        )
+
     # Приведённый по реферальной ссылке получает бонусные дни сразу к
     # триалу — отдельный вызов Remnawave тут не нужен, сквады те же.
     bonus = config.referral_bonus_days if user.referred_by_id else 0
-    user = await grant(
+    days = config.trial_days + bonus
+    expire_at = datetime.now(UTC) + timedelta(days=days)
+
+    client = client_for(config)
+    try:
+        remote = await _create_or_adopt(
+            client,
+            username=_username_for(user.telegram_id),
+            expire_at=expire_at,
+            internal_squad_uuids=config.trial_squad_uuids,
+            telegram_id=user.telegram_id,
+            hwid_device_limit=config.trial_hwid_limit,
+            description="Выдано ботом: trial",
+        )
+    finally:
+        await client.aclose()
+
+    mirrored = await _mirror_subscription(
         db,
-        config,
         user,
-        days=config.trial_days + bonus,
-        squad_uuids=config.trial_squad_uuids,
-        hwid_limit=config.trial_hwid_limit,
-        source="trial",
+        remnawave_id=remote.id,
+        username=remote.username,
+        subscription_url=remote.subscription_url,
+        expire_at=remote.expire_at or expire_at,
+        plan_id=None,
+        is_trial=True,
+    )
+    db.add(
+        Purchase(
+            user_id=user.id,
+            subscription_id=mirrored.id,
+            days=days,
+            source="trial",
+            expire_at=mirrored.expire_at,
+        )
     )
     user.trial_used = True
+    await refresh_user_summary(db, user)
+    log.info("Выдан пробный период: tg=%s дней=%s", user.telegram_id, days)
     return user
 
 
@@ -323,6 +399,7 @@ async def grant_plan(
         traffic_limit_bytes=plan.traffic_limit_bytes,
         source=source,
         plan_id=plan.id,
+        plan_title=plan.title,
         amount_kopeks=plan.price_kopeks,
     )
 
@@ -338,13 +415,11 @@ async def list_subscriptions(db: AsyncSession, user: BotUser) -> list[BotSubscri
 
 
 async def _trial_key(db: AsyncSession, user: BotUser) -> BotSubscription | None:
-    """Триальный ключ пользователя, если это его единственный ключ без
-    тарифа: при первой покупке его апгрейдим, а не оставляем висеть рядом
-    с платным (так же поступает исходный бот — там пробный ключ удаляется)."""
-    if not user.trial_used:
-        return None
+    """Пробный ключ пользователя, если он у него единственный: при первой
+    покупке его апгрейдим, а не оставляем висеть рядом с платным (так же
+    поступает исходный бот — там пробный ключ удаляется)."""
     rows = await list_subscriptions(db, user)
-    if len(rows) != 1 or rows[0].plan_id is not None:
+    if len(rows) != 1 or not rows[0].is_trial:
         return None
     return rows[0]
 
@@ -402,6 +477,8 @@ async def create_subscription(
         subscription.subscription_url = remote.subscription_url or trial.subscription_url
         subscription.expire_at = remote.expire_at or expire_at
         subscription.plan_id = plan.id
+        subscription.title = plan.title
+        subscription.is_trial = False
     else:
         subscription = BotSubscription(
             user_id=user.id,
@@ -410,6 +487,7 @@ async def create_subscription(
             subscription_url=remote.subscription_url,
             expire_at=remote.expire_at or expire_at,
             plan_id=plan.id,
+            title=plan.title,
         )
         db.add(subscription)
     await db.flush()
@@ -418,6 +496,7 @@ async def create_subscription(
         Purchase(
             user_id=user.id,
             plan_id=plan.id,
+            plan_title=plan.title,
             subscription_id=subscription.id,
             days=plan.days,
             amount_kopeks=paid,
@@ -468,11 +547,14 @@ async def extend_subscription(
     subscription.subscription_url = remote.subscription_url or subscription.subscription_url
     subscription.expire_at = remote.expire_at or expire_at
     subscription.plan_id = plan.id
+    subscription.title = plan.title
+    subscription.is_trial = False
 
     db.add(
         Purchase(
             user_id=subscription.user_id,
             plan_id=plan.id,
+            plan_title=plan.title,
             subscription_id=subscription.id,
             days=plan.days,
             amount_kopeks=paid,

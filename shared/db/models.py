@@ -375,6 +375,13 @@ class BotSubscription(Base, TimestampMixin):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
     )
+    # Название тарифа на момент покупки. Тариф могут переименовать или
+    # удалить (plan_id тогда обнуляется), а ключ у клиента остаётся — без
+    # снимка имени подписка превращалась бы в безымянную.
+    title: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Пробный ключ. Отдельный признак, а не «plan_id пустой»: пустым он
+    # становится и у платной подписки, если админ удалил её тариф.
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Автопродление с баланса именно этого ключа (по тарифу plan_id) —
     # переключается пользователем в карточке ключа.
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -396,6 +403,9 @@ class Purchase(Base, TimestampMixin):
     plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_plans.id", ondelete="SET NULL"), default=None
     )
+    # Снимок названия тарифа — история покупок не должна пустеть после
+    # удаления тарифа в панели.
+    plan_title: Mapped[str | None] = mapped_column(String(64), default=None)
     subscription_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
     )
