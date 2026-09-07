@@ -234,9 +234,9 @@ def providers_menu(config: Config, *, purpose: str, target: str, back: str = "me
     «включённого» провайдера без ключей вела в тупик."""
     rows = []
     if config.platega_ready:
-        rows.append([_btn(config, "СБП / карта", callback_data=f"pay:{purpose}:platega:{target}", icon="card")])
+        rows.append([_btn(config, "СБП / карта", callback_data=f"pay:{purpose}:platega:{target}", icon="sbp")])
     if config.rollypay_ready:
-        rows.append([_btn(config, "СБП (резерв)", callback_data=f"pay:{purpose}:rollypay:{target}", icon="card")])
+        rows.append([_btn(config, "СБП (резерв)", callback_data=f"pay:{purpose}:rollypay:{target}", icon="sbp")])
     if config.cryptobot_ready:
         rows.append([_btn(config, "Криптовалюта", callback_data=f"pay:{purpose}:cryptobot:{target}", icon="crypto")])
     if config.stars_enabled:
@@ -255,7 +255,7 @@ def providers_menu(config: Config, *, purpose: str, target: str, back: str = "me
 def pay_menu(config: Config, *, pay_url: str, payment_id: int) -> InlineKeyboardMarkup:
     return _markup(
         [
-            [_btn(config, "Оплатить", url=pay_url, icon="card", style="success")],
+            [_btn(config, "Оплатить", url=pay_url, icon="sbp", style="success")],
             [_btn(config, "Проверить оплату", callback_data=f"checkpay:{payment_id}", icon="refresh")],
             [_btn(config, "Отмена", callback_data="menu", icon="cancel", style="danger")],
         ]
@@ -374,14 +374,14 @@ def profile_menu(config: Config) -> InlineKeyboardMarkup:
 
 def wallet_menu(config: Config) -> InlineKeyboardMarkup:
     presets = [
-        _btn(config, f"+{amount} ₽", callback_data=f"topup:{amount}", icon="balance")
+        _btn(config, f"+{amount} ₽", callback_data=f"topup:{amount}")
         for amount in TOPUP_PRESETS_RUB
     ]
     return _markup(
         [
             presets[:2],
             presets[2:],
-            [_btn(config, "Другая сумма", callback_data="topup_custom", icon="edit")],
+            [_btn(config, "Другая сумма", callback_data="topup_custom")],
             [_btn(config, "Назад", callback_data="menu", icon="back")],
         ]
     )

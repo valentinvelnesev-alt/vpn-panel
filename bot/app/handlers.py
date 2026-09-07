@@ -548,7 +548,7 @@ async def cb_topup_preset(callback: CallbackQuery, config: Config) -> None:
 
 
 @router.callback_query(F.data == "topup_custom")
-async def cb_topup_custom(callback: CallbackQuery, state: FSMContext) -> None:
+async def cb_topup_custom(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
     await state.set_state(UserStates.entering_topup_amount)
     await safe_edit(
         callback.message,
