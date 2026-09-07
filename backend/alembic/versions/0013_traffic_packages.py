@@ -23,8 +23,20 @@ def upgrade() -> None:
         sa.Column("price_kopeks", sa.Integer(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        # server_default обязателен: модели проставляют время БД-функцией
+        # (TimestampMixin), в самом INSERT этих колонок нет.
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
     )
     with op.batch_alter_table("bot_payments") as batch:
         batch.add_column(sa.Column("traffic_package_id", sa.Integer(), nullable=True))
