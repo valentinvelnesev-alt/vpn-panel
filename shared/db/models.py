@@ -389,6 +389,9 @@ class BotSubscription(Base, TimestampMixin):
         ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     remnawave_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # uuid ключа в Remnawave. Заполнен только у старых панелей (до 2.9),
+    # где пользователь адресуется именно им, а не числовым id.
+    remnawave_uuid: Mapped[str | None] = mapped_column(String(64), default=None)
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     subscription_url: Mapped[str | None] = mapped_column(Text, default=None)
     expire_at: Mapped[datetime | None] = mapped_column(
@@ -411,6 +414,11 @@ class BotSubscription(Base, TimestampMixin):
     user: Mapped[BotUser] = relationship(
         back_populates="subscriptions", foreign_keys=[user_id]
     )
+
+    @property
+    def remote_ref(self) -> int | str:
+        """Чем обращаться к Remnawave: uuid у старых панелей, id у новых."""
+        return self.remnawave_uuid or self.remnawave_id
 
 
 class Purchase(Base, TimestampMixin):

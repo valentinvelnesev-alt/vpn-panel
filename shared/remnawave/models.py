@@ -43,8 +43,16 @@ class Squad(_Base):
 
 
 class User(_Base):
-    # API >= 2.9: первичный ключ — целочисленный id, uuid убран.
-    id: int
+    """Пользователь Remnawave.
+
+    Ключ адресации зависит от версии панели: до 2.9 это строковый `uuid`,
+    начиная с 2.9 — числовой `id`. Версия 2.8.1 отдаёт оба поля, новые —
+    только `id`, поэтому оба необязательные, а обращаться нужно через
+    `ref` (см. клиент).
+    """
+
+    id: int | None = None
+    uuid: str | None = None
     short_uuid: str | None = Field(default=None, alias="shortUuid")
     username: str
     status: UserStatus
@@ -64,6 +72,16 @@ class User(_Base):
         default_factory=list, alias="activeInternalSquads"
     )
     user_traffic: UserTraffic | None = Field(default=None, alias="userTraffic")
+
+    @property
+    def ref(self) -> "int | str":
+        """Идентификатор для путей и тел запросов. uuid приоритетнее: если
+        панель его отдала, значит она старая и числовой id не примет."""
+        if self.uuid:
+            return self.uuid
+        if self.id is not None:
+            return self.id
+        raise ValueError("Remnawave вернула пользователя без uuid и id")
 
     @property
     def used_traffic_bytes(self) -> int:

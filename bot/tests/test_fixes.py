@@ -721,3 +721,112 @@ async def test_traffic_payment_is_applied_once(db, engine, config, remote_with_l
     assert state["limit"] == 150 * 1024**3  # прибавилось ровно один раз
     async with maker() as s:
         assert (await s.get(Payment, payment.id)).applied_at is not None
+
+
+# ── Совместимость со старыми Remnawave (адресация по uuid) ────────────
+OLD_PANEL_USER = {
+    "uuid": "b2c0adcb-0dac-460a-8d84-ba035c74d19f",
+    "id": 120,
+    "username": "tg_777",
+    "status": "ACTIVE",
+    "trafficLimitBytes": 0,
+    "trafficLimitStrategy": "NO_RESET",
+    "subscriptionUrl": "https://sub.example/old",
+    "activeInternalSquads": [],
+}
+
+
+@pytest.fixture
+def old_panel(monkeypatch):
+    """Remnawave до 2.9: отдаёт и uuid, и id, но принимает только uuid."""
+    calls: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content) if request.content else {}
+        calls.append((f"{request.method} {request.url.path}", body))
+        return httpx.Response(200, json={"response": {**OLD_PANEL_USER, **{k: v for k, v in body.items() if k == "expireAt"}}})
+
+    from shared.remnawave import client as rw
+
+    original = rw.RemnawaveClient.__init__
+
+    def patched(self, base_url, token, **kwargs):
+        original(self, base_url, token, **kwargs)
+        self._client = httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", patched)
+    return calls
+
+
+def test_user_ref_prefers_uuid_when_panel_is_old() -> None:
+    from shared.remnawave.models import User
+
+    old = User.model_validate(OLD_PANEL_USER)
+    assert old.ref == OLD_PANEL_USER["uuid"]
+
+    new = User.model_validate({**OLD_PANEL_USER, "uuid": None})
+    assert new.ref == 120
+
+
+def test_client_switches_field_names_by_ref_type() -> None:
+    from shared.remnawave.client import _ref_field
+
+    assert _ref_field("b2c0adcb") == {"uuid": "b2c0adcb"}
+    assert _ref_field(120) == {"id": 120}
+    assert _ref_field("b2c0adcb", uuid_name="userUuid", id_name="userId") == {
+        "userUuid": "b2c0adcb"
+    }
+    assert _ref_field(120, uuid_name="userUuid", id_name="userId") == {"userId": 120}
+
+
+async def test_old_panel_key_is_addressed_by_uuid(db, config, old_panel) -> None:
+    """Ключ, выданный старой панелью, должен и продлеваться, и читаться по
+    uuid: числовой id она отвергает с «Invalid uuid»."""
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="wallet")
+    await db.flush()
+
+    assert sub.remnawave_uuid == OLD_PANEL_USER["uuid"]
+    assert sub.remote_ref == OLD_PANEL_USER["uuid"]
+
+    await subs.extend_subscription(db, config, sub, PLAN)
+    method, body = old_panel[-1]
+    assert method == "PATCH /api/users"
+    assert body["uuid"] == OLD_PANEL_USER["uuid"] and "id" not in body
+
+
+async def test_new_panel_key_is_addressed_by_id(db, config, remote) -> None:
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="wallet")
+    await db.flush()
+
+    assert sub.remnawave_uuid is None
+    assert sub.remote_ref == sub.remnawave_id
+
+    await subs.extend_subscription(db, config, sub, PLAN)
+    method, body = remote[-1]
+    assert method == "PATCH /api/users"
+    assert body["id"] == sub.remnawave_id and "uuid" not in body
+
+
+async def test_device_calls_use_matching_field_names(config, old_panel) -> None:
+    client = subs.client_for(config)
+    try:
+        await client.delete_all_devices("b2c0adcb")
+        await client.delete_device(120, "hwid-1")
+    finally:
+        await client.aclose()
+
+    assert old_panel[-2][1] == {"userUuid": "b2c0adcb"}
+    assert old_panel[-1][1] == {"userId": 120, "hwid": "hwid-1"}
+
+
+def test_stored_ref_round_trip() -> None:
+    from shared.sync import stored_ref
+
+    assert stored_ref("120") == 120
+    assert stored_ref("b2c0adcb-0dac") == "b2c0adcb-0dac"
+    assert stored_ref(None) is None
+    assert stored_ref("") is None
