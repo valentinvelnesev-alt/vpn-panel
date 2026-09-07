@@ -229,6 +229,19 @@ function PlanForm({
             onChange={(e) => set('hwid_limit', Number(e.target.value))}
           />
         </Field>
+        <Field
+          label="Лимит трафика, ГБ"
+          hint="0 — безлимит. При лимите клиент сможет докупать трафик пакетами."
+        >
+          <Input
+            type="number"
+            min={0}
+            value={Math.round(form.traffic_limit_bytes / 1024 ** 3)}
+            onChange={(e) =>
+              set('traffic_limit_bytes', Math.max(0, Number(e.target.value)) * 1024 ** 3)
+            }
+          />
+        </Field>
         <Field label="Категория (необязательно)">
           <select
             className="h-10 w-full rounded-lg border bg-surface px-3 text-sm"
@@ -366,7 +379,8 @@ export default function BotPlans() {
                 <span className="font-medium">{plan.title}</span>
                 <span className="text-sm text-muted">
                   {' '}
-                  · {plan.days} дн. · {plan.price_rub} ₽ · {plan.hwid_limit} устр.
+                  · {plan.days} дн. · {plan.price_rub} ₽ · {plan.hwid_limit} устр. ·{' '}
+                  {plan.traffic_limit_bytes ? `${Math.round(plan.traffic_limit_bytes / 1024 ** 3)} ГБ` : 'безлимит'}
                 </span>
               </button>
               <button

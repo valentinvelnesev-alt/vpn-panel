@@ -1,50 +1,31 @@
 """Тексты бота в двух вариантах эмодзи.
 
-Каждая иконка описана парой: обычный юникод-символ и id премиум-эмодзи.
-Рендерер подставляет нужный вариант по режиму из настроек, поэтому старый
-хардкод вида `_EMOJI_ID = "5271604874419647061"` в коде хендлеров исчезает.
-
-Премиум-эмодзи вставляются как HTML-тег <tg-emoji>: Telegram показывает
-анимированную версию тем, у кого её видно, и обычный символ остальным.
+Иконки описаны в app/icons.py: там и обычный символ, и id премиум-эмодзи,
+и точная заглушка набора. Премиум вставляется тегом <tg-emoji>: Telegram
+показывает анимированную версию тем, у кого она видна, и обычный символ
+остальным.
 """
 
+from app.icons import ICONS
 from shared.db.models import EmojiMode
 
-# Обычные символы — работают у всех и всегда.
-ICONS: dict[str, str] = {
-    "shield": "🛡",
-    "rocket": "🚀",
-    "key": "🔑",
-    "clock": "⏳",
-    "check": "✅",
-    "cross": "❌",
-    "star": "⭐️",
-    "card": "💳",
-    "phone": "📱",
-    "gift": "🎁",
-    "warning": "⚠️",
-    "info": "ℹ️",
-    "link": "🔗",
-    "user": "👤",
-    "wallet": "💰",
-    "history": "🧾",
-    "traffic": "📶",
-}
-
-# id премиум-эмодзи не «универсальны»: они принадлежат конкретным наборам
-# стикеров, и выдуманный id Telegram отвергнет. Поэтому владелец панели
-# задаёт соответствие «иконка → id» сам (в разделе «Бот»), а пока карта
-# пуста — премиум-режим просто рисует обычные символы.
 PremiumMap = dict[str, str]
 
 
 def icon(name: str, mode: EmojiMode, premium: PremiumMap | None = None) -> str:
-    plain = ICONS.get(name, "")
-    if mode is EmojiMode.PREMIUM and premium:
-        emoji_id = premium.get(name)
-        if emoji_id:
-            return f'<tg-emoji emoji-id="{emoji_id}">{plain}</tg-emoji>'
-    return plain
+    entry = ICONS.get(name)
+    if entry is None:
+        return ""
+    if mode is not EmojiMode.PREMIUM:
+        return entry.plain
+    # Карта из панели важнее встроенной, но заглушку под чужой id мы не
+    # знаем — берём обычный символ, он всегда корректен для своего же id.
+    override = (premium or {}).get(name)
+    if override:
+        return f'<tg-emoji emoji-id="{override}">{entry.plain}</tg-emoji>'
+    if entry.emoji_id:
+        return f'<tg-emoji emoji-id="{entry.emoji_id}">{entry.placeholder}</tg-emoji>'
+    return entry.plain
 
 
 def render(
@@ -97,7 +78,7 @@ TRIAL_GRANTED = (
 TRIAL_USED = "{@warning} Пробный период уже использован."
 TRIAL_DISABLED = "{@warning} Пробный период сейчас недоступен."
 
-PLANS_HEADER = "{@card} <b>Тарифы</b>\n\nВыберите срок подписки:"
+PLANS_HEADER = "{@card} <b>Выберите тариф</b>"
 NO_PLANS = "{@info} Тарифы ещё не настроены. Загляните позже."
 
 CHANNEL_REQUIRED = (
@@ -105,8 +86,8 @@ CHANNEL_REQUIRED = (
     "Подпишитесь на наш канал — и возвращайтесь к боту."
 )
 
-DEVICES_HEADER = "{@phone} <b>Ваши устройства</b>\n\n"
-DEVICES_EMPTY = "{@phone} Подключённых устройств пока нет."
+DEVICES_HEADER = "{@devices} <b>Ваши устройства</b>\n\n"
+DEVICES_EMPTY = "{@devices} Подключённых устройств пока нет."
 
 EXPIRY_WARNING = (
     "{@clock} <b>Подписка заканчивается</b>\n\n"
