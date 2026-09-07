@@ -364,3 +364,22 @@ def test_every_handler_declares_what_it_uses() -> None:
                 assert not (name in used and name not in bound), (
                     f"{path}:{node.lineno} {node.name}() использует «{name}», но не принимает его"
                 )
+
+
+def test_balance_uses_wallet_icon_not_a_card() -> None:
+    """У баланса кошелёк; карта уместна только у способов оплаты."""
+    from app.icons import ICONS
+
+    assert ICONS["balance"].emoji_id == ICONS["wallet"].emoji_id
+    assert ICONS["balance"].emoji_id != ICONS["card"].emoji_id
+    assert ICONS["balance"].placeholder == "💰"
+
+    balance = next(
+        b
+        for row in keyboards.main_menu(
+            CONFIG, trial_available=False, has_subscription=True, balance_kopeks=0
+        ).inline_keyboard
+        for b in row
+        if b.text.startswith("Баланс:")
+    )
+    assert balance.icon_custom_emoji_id == ICONS["wallet"].emoji_id
