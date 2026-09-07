@@ -1,0 +1,9 @@
+# Маршрут редиректора. Ставится ДО reverse_proxy на страницу подписки,
+# иначе /miniapp/* уйдёт в апстрим и вернётся 502.
+handle_path /miniapp/* {
+    root * /srv/redirect
+    rewrite * /redirect.html
+    file_server
+}
+
+reverse_proxy * http://subscription-page:3010

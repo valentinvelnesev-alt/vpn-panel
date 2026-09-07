@@ -53,15 +53,22 @@ export default function Settings() {
   const [url, setUrl] = useState('')
   const [token, setToken] = useState('')
   const [verifyTls, setVerifyTls] = useState(true)
+  const [redirect, setRedirect] = useState(false)
 
   useEffect(() => {
     if (current) {
       setUrl(current.url ?? '')
       setVerifyTls(current.verify_tls)
+      setRedirect(current.subscription_redirect_enabled)
     }
   }, [current])
 
-  const payload = () => ({ url, token, verify_tls: verifyTls })
+  const payload = () => ({
+    url,
+    token,
+    verify_tls: verifyTls,
+    subscription_redirect_enabled: redirect,
+  })
 
   const check = useMutation({ mutationFn: () => panel.checkRemnawave(payload()) })
   const save = useMutation({
@@ -128,6 +135,22 @@ export default function Settings() {
             Проверять TLS-сертификат
             <span className="text-xs text-muted">
               (снимите, только если у Remnawave самоподписанный сертификат)
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={redirect}
+              onChange={(e) => setRedirect(e.target.checked)}
+              className="mt-0.5 size-4"
+            />
+            <span>
+              Открывать приложение по кнопке «Подключиться»
+              <span className="mt-0.5 block text-xs text-muted">
+                Требует страницы <code>/miniapp/redirect.html</code> на домене подписок.
+                Пока её нет, кнопка ведёт на саму ссылку подписки — не включайте.
+              </span>
             </span>
           </label>
 

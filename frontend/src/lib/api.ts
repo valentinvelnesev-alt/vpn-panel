@@ -329,6 +329,7 @@ export interface RemnawaveSettings {
   token_masked: string | null
   verify_tls: boolean
   configured: boolean
+  subscription_redirect_enabled: boolean
 }
 
 export const panel = {
@@ -446,7 +447,12 @@ export const panel = {
   exportPaymentsCsvUrl: '/api/v1/analytics/export/payments.csv',
 
   remnawaveSettings: () => api<RemnawaveSettings>('/settings/remnawave'),
-  saveRemnawave: (json: { url: string; token: string; verify_tls: boolean }) =>
+  saveRemnawave: (json: {
+    url: string
+    token: string
+    verify_tls: boolean
+    subscription_redirect_enabled: boolean
+  }) =>
     api<RemnawaveSettings>('/settings/remnawave', { method: 'PUT', json }),
   checkRemnawave: (json: { url: string; token: string; verify_tls: boolean }) =>
     api<{ ok: boolean; message: string; version: string | null }>(

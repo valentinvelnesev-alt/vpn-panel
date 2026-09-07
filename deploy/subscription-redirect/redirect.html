@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Подключение VPN</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+           justify-content: center; font: 16px/1.5 -apple-system, BlinkMacSystemFont,
+           "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+    main { max-width: 30rem; padding: 2rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <p id="message">Открываем приложение…</p>
+  </main>
+  <script>
+    // Домен подписок. Пускаем ТОЛЬКО ссылки на него: параметр url приходит
+    // снаружи, и без этой проверки страница стала бы открытым редиректором.
+    var domain = 'https://sub.luxinet.ru/';
+
+    var target = new URLSearchParams(location.search).get('url') || '';
+    var allowed =
+      target.indexOf('happ://add/' + domain) === 0 ||
+      target.indexOf('incy://import/' + domain) === 0;
+
+    if (allowed) {
+      location.replace(target);
+    } else {
+      document.getElementById('message').textContent =
+        'Некорректная ссылка для подключения.';
+    }
+  </script>
+</body>
+</html>

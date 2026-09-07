@@ -121,6 +121,10 @@ class Config:
     remnawave_url: str | None = None
     remnawave_token: str | None = None
     remnawave_verify_tls: bool = True
+    # Страница-редиректор развёрнута на домене подписок (её ставит владелец
+    # на своём сервере Remnawave). Пока флага нет, «Подключиться» ведёт на
+    # саму ссылку подписки — рабочее поведение по умолчанию.
+    subscription_redirect: bool = False
 
     platega_enabled: bool = False
     platega_merchant_id: str | None = None
@@ -188,6 +192,7 @@ async def load(db: AsyncSession) -> Config:
         "remnawave_url",
         "remnawave_token",
         "remnawave_verify_tls",
+        "subscription_redirect_enabled",
         "payment_platega_enabled",
         "payment_platega_merchant_id",
         "payment_platega_secret",
@@ -235,6 +240,7 @@ async def load(db: AsyncSession) -> Config:
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),
         remnawave_verify_tls=raw.get("remnawave_verify_tls") != "false",
+        subscription_redirect=flag("subscription_redirect_enabled"),
         platega_enabled=flag("payment_platega_enabled"),
         platega_merchant_id=raw.get("payment_platega_merchant_id"),
         platega_secret=raw.get("payment_platega_secret"),

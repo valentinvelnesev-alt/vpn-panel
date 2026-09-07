@@ -13,6 +13,9 @@ from shared.db.models import Setting
 REMNAWAVE_URL: Final = "remnawave_url"
 REMNAWAVE_TOKEN: Final = "remnawave_token"
 REMNAWAVE_VERIFY_TLS: Final = "remnawave_verify_tls"
+# Страница-редиректор /miniapp/redirect.html на домене подписок: с ней
+# кнопка «Подключиться» открывает приложение, без неё — саму ссылку.
+SUBSCRIPTION_REDIRECT_ENABLED: Final = "subscription_redirect_enabled"
 BRAND_NAME: Final = "brand_name"
 BRAND_LOGO_URL: Final = "brand_logo_url"
 HIDE_POWERED_BY: Final = "hide_powered_by"
