@@ -311,3 +311,56 @@ def test_traffic_button_hidden_without_packages() -> None:
         for b in row
     ]
     assert "Докупить трафик" in with_traffic
+
+
+def test_topup_amounts_have_no_icons() -> None:
+    """Иконка уместна у способа оплаты, а не у каждой суммы пополнения."""
+    rows = keyboards.wallet_menu(CONFIG).inline_keyboard
+    for row in rows:
+        for button in row:
+            if button.text.startswith("+") or button.text == "Другая сумма":
+                assert getattr(button, "icon_custom_emoji_id", None) is None, button.text
+
+
+def test_payment_methods_use_the_sbp_icon() -> None:
+    from app.icons import ICONS
+
+    markup = keyboards.providers_menu(CONFIG, purpose="plan", target="1")
+    sbp = next(b for row in markup.inline_keyboard for b in row if "СБП" in b.text)
+    assert sbp.icon_custom_emoji_id == ICONS["sbp"].emoji_id
+
+
+def test_every_handler_declares_what_it_uses() -> None:
+    """Массовые правки легко оставляют хендлер без `config` — тогда экран
+    падает в общий обработчик ошибок с «Что-то пошло не так»."""
+    import ast
+    import pathlib
+
+    for path in ("app/handlers.py", "app/admin.py"):
+        source = pathlib.Path(__file__).resolve().parents[1] / path
+        tree = ast.parse(source.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            params = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
+            bound = set(params)
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Assign):
+                    bound |= {t.id for t in inner.targets if isinstance(t, ast.Name)}
+                elif isinstance(inner, (ast.AnnAssign, ast.AugAssign)) and isinstance(
+                    inner.target, ast.Name
+                ):
+                    bound.add(inner.target.id)
+                elif isinstance(inner, (ast.With, ast.AsyncWith)):
+                    bound |= {
+                        i.optional_vars.id
+                        for i in inner.items
+                        if isinstance(i.optional_vars, ast.Name)
+                    }
+            used = {
+                n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+            }
+            for name in ("config", "state", "bot"):
+                assert not (name in used and name not in bound), (
+                    f"{path}:{node.lineno} {node.name}() использует «{name}», но не принимает его"
+                )
