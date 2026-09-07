@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type BotStatus, type BotSettings } from '@/lib/api'
 import BotPlans from './BotPlans'
+import BotTraffic from './BotTraffic'
 import BotPromo from './BotPromo'
 import BotReferral from './BotReferral'
 
@@ -392,6 +393,7 @@ export default function Bot() {
       {status.configured && (
         <>
           <BotPlans />
+          <BotTraffic />
           <BotPromo />
           <BotReferral />
           <SettingsCard status={status} />

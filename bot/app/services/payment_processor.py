@@ -81,7 +81,32 @@ async def _apply(payment_id: int) -> Applied | None:
             log.warning("Платёж %s ждёт: у бота нет токена", payment_id)
             return None
 
-        if payment.purpose == PaymentPurpose.TOPUP:
+        if payment.purpose == PaymentPurpose.TRAFFIC:
+            package = await config_module.load_traffic_package(db, payment.traffic_package_id)
+            subscription = (
+                await db.get(BotSubscription, payment.subscription_id)
+                if payment.subscription_id
+                else None
+            )
+            if package is None or subscription is None or subscription.user_id != user.id:
+                log.error("У платежа %s не найден пакет трафика или ключ", payment_id)
+                return None
+            await subs.add_traffic(
+                db,
+                config,
+                subscription,
+                package,
+                source=str(payment.provider),
+                amount_kopeks=payment.amount_kopeks,
+            )
+            text = texts.render(
+                "{@check} Оплата получена, добавлено {gb} ГБ трафика",
+                config.emoji_mode,
+                config.premium_emoji,
+                gb=package.traffic_gb,
+            )
+            plan_title = f"+{package.traffic_gb} ГБ трафика"
+        elif payment.purpose == PaymentPurpose.TOPUP:
             await wallet.credit(
                 db,
                 user,

@@ -227,6 +227,15 @@ export interface PlanCategory extends PlanCategoryInput {
   id: number
 }
 
+export interface TrafficPackage {
+  id: number
+  title: string
+  traffic_gb: number
+  price_rub: number
+  is_active: boolean
+  sort_order: number
+}
+
 export interface Providers {
   platega_enabled: boolean
   platega_merchant_id: string | null
@@ -445,6 +454,14 @@ export const panel = {
 
   analyticsOverview: () => api<AnalyticsOverview>('/analytics/overview'),
   exportPaymentsCsvUrl: '/api/v1/analytics/export/payments.csv',
+
+  trafficPackages: () => api<TrafficPackage[]>('/bot/traffic-packages'),
+  createTrafficPackage: (json: Omit<TrafficPackage, 'id'>) =>
+    api<TrafficPackage>('/bot/traffic-packages', { method: 'POST', json }),
+  updateTrafficPackage: (id: number, json: Omit<TrafficPackage, 'id'>) =>
+    api<TrafficPackage>(`/bot/traffic-packages/${id}`, { method: 'PUT', json }),
+  deleteTrafficPackage: (id: number) =>
+    api<void>(`/bot/traffic-packages/${id}`, { method: 'DELETE' }),
 
   remnawaveSettings: () => api<RemnawaveSettings>('/settings/remnawave'),
   saveRemnawave: (json: {

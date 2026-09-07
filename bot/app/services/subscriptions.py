@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Config, PlanView
+from app.config import Config, PlanView, TrafficPackageView
 from app.services import referral
 from app.services.notify import send as notify_send
 from shared.db.models import BotSubscription, BotUser, Purchase
@@ -569,6 +569,57 @@ async def extend_subscription(
         "Продлён ключ #%s: тариф=%s до %s", subscription.id, plan.title, subscription.expire_at
     )
     return subscription
+
+
+class TrafficUnavailable(Exception):
+    """Причина отказа в докупке трафика — показывается пользователю."""
+
+
+async def add_traffic(
+    db: AsyncSession,
+    config: Config,
+    subscription: BotSubscription,
+    package: TrafficPackageView,
+    *,
+    source: str,
+    amount_kopeks: int | None = None,
+) -> int:
+    """Поднимает лимит трафика ключа на размер пакета. Возвращает новый лимит.
+
+    Отдельной операции «добавить трафик» в Remnawave нет — есть только
+    лимит пользователя, поэтому читаем текущий и прибавляем. Значение 0
+    означает безлимит: к нему прибавлять нечего, и продавать пакет тоже.
+    """
+    paid = package.price_kopeks if amount_kopeks is None else amount_kopeks
+
+    client = client_for(config)
+    try:
+        remote = await client.get_user(subscription.remnawave_id)
+        if remote.traffic_limit_bytes <= 0:
+            raise TrafficUnavailable("На этой подписке трафик безлимитный — докупать нечего")
+        new_limit = remote.traffic_limit_bytes + package.traffic_bytes
+        await client.update_user(subscription.remnawave_id, trafficLimitBytes=new_limit)
+    finally:
+        await client.aclose()
+
+    db.add(
+        Purchase(
+            user_id=subscription.user_id,
+            plan_title=f"+{package.traffic_gb} ГБ трафика",
+            subscription_id=subscription.id,
+            days=0,
+            amount_kopeks=paid,
+            source=source,
+            expire_at=subscription.expire_at,
+        )
+    )
+    log.info(
+        "Докуплен трафик: ключ #%s +%s ГБ, новый лимит %s байт",
+        subscription.id,
+        package.traffic_gb,
+        new_limit,
+    )
+    return new_limit
 
 
 async def after_paid_purchase(

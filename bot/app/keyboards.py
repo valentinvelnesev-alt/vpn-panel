@@ -287,8 +287,29 @@ def subscriptions_menu(
     return _markup(rows)
 
 
+def traffic_packages_menu(config: Config, subscription_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            _btn(
+                config,
+                f"{package.title} • {format_rub(package.price_kopeks)}",
+                callback_data=f"pt:{subscription_id}:{package.id}",
+                icon="traffic",
+            )
+        ]
+        for package in config.traffic_packages
+    ]
+    rows.append([_btn(config, "Назад", callback_data=f"viewsub:{subscription_id}", icon="back")])
+    return _markup(rows)
+
+
 def subscription_detail_menu(
-    config: Config, subscription_id: int, *, has_url: bool, auto_renew: bool | None = None
+    config: Config,
+    subscription_id: int,
+    *,
+    has_url: bool,
+    auto_renew: bool | None = None,
+    can_buy_traffic: bool = False,
 ) -> InlineKeyboardMarkup:
     """auto_renew=None — у ключа нет тарифа (пробный/бонусный), продлевать
     автоматически нечем, переключатель не показываем."""
@@ -305,6 +326,10 @@ def subscription_detail_menu(
                     icon="autorenew",
                 )
             ]
+        )
+    if can_buy_traffic:
+        rows.append(
+            [_btn(config, "Докупить трафик", callback_data=f"subtraffic:{subscription_id}", icon="traffic")]
         )
     rows.append([_btn(config, "Устройства", callback_data=f"subdevices:{subscription_id}", icon="devices")])
     rows.append([_btn(config, "Назад", callback_data="my_subscriptions", icon="back")])
