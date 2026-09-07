@@ -8,10 +8,43 @@
 
 from html import escape
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.icons import icon_id, style_or_none
+
+# Схемы импорта подписки в приложениях.
+DEEP_LINK_PREFIX = {"happ": "happ://add/", "incy": "incy://import/"}
+# Страница-редиректор на домене подписок. Telegram не открывает happ:// и
+# incy:// напрямую, поэтому ссылку заворачиваем в обычный https-адрес,
+# который уже перебрасывает в приложение.
+REDIRECT_PATH = "/miniapp/redirect.html"
+
+
+def deep_link(app: str, subscription_url: str) -> str:
+    return DEEP_LINK_PREFIX[app] + subscription_url
+
+
+def redirect_url(app: str, subscription_url: str) -> str:
+    """https://<домен подписок>/miniapp/redirect.html?url=<кодированная схема>.
+
+    Домен берётся из самой ссылки подписки: страница-редиректор пускает
+    только свой домен, поэтому чужой сюда подставить нельзя."""
+    parts = urlsplit(subscription_url)
+    base = f"{parts.scheme}://{parts.netloc}{REDIRECT_PATH}"
+    return f"{base}?url={quote(deep_link(app, subscription_url), safe='')}"
+
+
+def connect_url(app: str, subscription_url: str, *, via_redirect: bool) -> str:
+    """Куда ведёт кнопка «Подключиться».
+
+    Без редиректора отдаём саму ссылку подписки: она открывается страницей
+    в браузере и работает всегда. Это же поведение остаётся запасным, пока
+    страница на домене подписок не развёрнута."""
+    if not via_redirect:
+        return subscription_url
+    return redirect_url(app, subscription_url)
 
 APPS: dict[str, dict[str, Any]] = {
     "ios": {
@@ -199,7 +232,13 @@ def instruction_text(device: str, app: str, url: str) -> str:
 
 
 def instruction_keyboard(
-    subscription_id: int, device: str, app: str, url: str, overrides=None
+    subscription_id: int,
+    device: str,
+    app: str,
+    url: str,
+    overrides=None,
+    *,
+    via_redirect: bool = False,
 ) -> InlineKeyboardMarkup:
     config = APPS[device][app]
 
@@ -212,7 +251,14 @@ def instruction_keyboard(
             [b(config.get("apk_label", "Скачать APK"), url=config["apk"], icon="download", style="primary")]
         )
     rows += [
-        [b("Подключиться", url=url, icon="connect", style="success")],
+        [
+            b(
+                "Подключиться",
+                url=connect_url(app, url, via_redirect=via_redirect),
+                icon="connect",
+                style="success",
+            )
+        ],
         [
             InlineKeyboardButton(
                 text="Скопировать подписку",

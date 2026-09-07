@@ -186,3 +186,92 @@ def test_referral_button_named_as_requested() -> None:
         for b in row
     ]
     assert "Рефералка" in labels
+
+
+# ── Нижняя клавиатура ─────────────────────────────────────────────────
+def test_reply_keyboard_has_menu_and_help() -> None:
+    kb = keyboards.reply_menu()
+    labels = [b.text for row in kb.keyboard for b in row]
+    assert labels == [keyboards.BTN_MENU, keyboards.BTN_HELP]
+    assert kb.resize_keyboard is True
+    assert kb.is_persistent is True
+
+
+# ── Редиректор подписки ───────────────────────────────────────────────
+SUB_URL = "https://sub.luxinet.ru/x72yERRmWcMWy_zA"
+
+
+def test_connect_url_without_redirect_is_the_subscription_link() -> None:
+    """Пока страницы-редиректора нет, кнопка ведёт на саму подписку —
+    рабочее поведение, а не заглушка."""
+    for app in ("happ", "incy"):
+        assert connection.connect_url(app, SUB_URL, via_redirect=False) == SUB_URL
+
+
+def test_connect_url_wraps_deep_link_into_https_page() -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    for app, prefix in (("happ", "happ://add/"), ("incy", "incy://import/")):
+        url = connection.connect_url(app, SUB_URL, via_redirect=True)
+        parts = urlsplit(url)
+        # Страница живёт на домене подписок, а не на домене панели.
+        assert parts.scheme == "https"
+        assert parts.netloc == "sub.luxinet.ru"
+        assert parts.path == "/miniapp/redirect.html"
+        target = parse_qs(parts.query)["url"][0]
+        assert target == prefix + SUB_URL
+        # Схема приложения обязана быть закодирована, иначе Telegram
+        # обрежет ссылку на «://».
+        assert "://" not in parts.query.split("url=", 1)[1]
+
+
+def test_bot_link_passes_the_pages_own_allowlist() -> None:
+    """Сверяем ссылку бота с проверкой, зашитой в redirect.html: если они
+    разойдутся, пользователь увидит «Некорректная ссылка»."""
+    import pathlib
+    import re
+    from urllib.parse import parse_qs, urlsplit
+
+    page = pathlib.Path(__file__).resolve().parents[2] / "deploy/subscription-redirect/redirect.html"
+    domain = re.search(r"var domain = '([^']+)'", page.read_text()).group(1)
+    assert domain.endswith("/"), "домен в странице должен заканчиваться слэшем"
+
+    subscription = domain + "abcdef123456"
+    for app, prefix in (("happ", "happ://add/"), ("incy", "incy://import/")):
+        url = connection.connect_url(app, subscription, via_redirect=True)
+        target = parse_qs(urlsplit(url).query)["url"][0]
+        assert target.startswith(prefix + domain)
+
+
+def test_redirect_page_rejects_foreign_targets() -> None:
+    """Параметр url приходит снаружи: чужой адрес должен отсекаться."""
+    import pathlib
+    import re
+
+    page = pathlib.Path(__file__).resolve().parents[2] / "deploy/subscription-redirect/redirect.html"
+    text = page.read_text()
+    domain = re.search(r"var domain = '([^']+)'", text).group(1)
+
+    def allowed(target: str) -> bool:
+        return target.startswith("happ://add/" + domain) or target.startswith(
+            "incy://import/" + domain
+        )
+
+    assert not allowed("https://evil.example/steal")
+    assert not allowed("happ://add/https://evil.example/x")
+    assert not allowed("javascript:alert(1)")
+    assert not allowed("test")
+    assert allowed("happ://add/" + domain + "key")
+
+
+def test_instruction_keyboard_uses_redirect_when_enabled() -> None:
+    def connect_button(via_redirect: bool) -> str:
+        markup = connection.instruction_keyboard(
+            7, "ios", "happ", SUB_URL, via_redirect=via_redirect
+        )
+        return next(
+            b.url for row in markup.inline_keyboard for b in row if b.text == "Подключиться"
+        )
+
+    assert connect_button(False) == SUB_URL
+    assert connect_button(True).startswith("https://sub.luxinet.ru/miniapp/redirect.html?url=")

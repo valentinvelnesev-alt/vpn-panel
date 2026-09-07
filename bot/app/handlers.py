@@ -281,7 +281,38 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
         )
         return
 
+    # Нижняя клавиатура ставится отдельным сообщением: в одном сообщении
+    # Telegram не разрешает и inline-кнопки, и клавиатуру под полем ввода.
+    await message.answer(
+        t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
+        reply_markup=keyboards.reply_menu(),
+    )
     await _show_menu(message, config)
+
+
+@router.message(F.text == keyboards.BTN_MENU)
+async def on_menu_button(message: Message, config: Config, state: FSMContext) -> None:
+    """Кнопка «Меню» работает всегда, в том числе посреди ввода промокода
+    или суммы — незавершённый диалог сбрасывается."""
+    await state.clear()
+    await _show_menu(message, config)
+
+
+@router.message(F.text == keyboards.BTN_HELP)
+async def on_help_button(message: Message, config: Config, state: FSMContext) -> None:
+    await state.clear()
+    if config.support_url:
+        await message.answer(
+            t(
+                config,
+                "{@info} <b>Поддержка</b>\n\nНапишите нам — поможем с подключением и оплатой.",
+            ),
+            reply_markup=keyboards.support_menu(config),
+        )
+        return
+    await message.answer(
+        t(config, "{@info} Контакт поддержки пока не указан в панели.")
+    )
 
 
 @router.callback_query(F.data == "menu")
@@ -1107,7 +1138,14 @@ async def _render_instruction(
     await safe_edit(
         callback.message,
         connection.instruction_text(device, app, url),
-        connection.instruction_keyboard(subscription_id, device, app, url, config.premium_emoji),
+        connection.instruction_keyboard(
+            subscription_id,
+            device,
+            app,
+            url,
+            config.premium_emoji,
+            via_redirect=config.subscription_redirect,
+        ),
         disable_web_page_preview=True,
     )
     await callback.answer()

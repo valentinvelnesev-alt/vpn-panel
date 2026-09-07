@@ -18,6 +18,7 @@ class RemnawaveSettingsOut(BaseModel):
     token_masked: str | None
     verify_tls: bool
     configured: bool
+    subscription_redirect_enabled: bool = False
 
 
 class RemnawaveSettingsIn(BaseModel):
@@ -25,6 +26,7 @@ class RemnawaveSettingsIn(BaseModel):
     # Пустой токен = «оставить прежний»: UI показывает маску, а не сам секрет.
     token: str = Field(default="", max_length=4096)
     verify_tls: bool = True
+    subscription_redirect_enabled: bool = False
 
 
 class ConnectionCheck(BaseModel):
@@ -36,7 +38,11 @@ class ConnectionCheck(BaseModel):
 @router.get("/remnawave", response_model=RemnawaveSettingsOut)
 async def get_remnawave(admin: CurrentAdmin, db: DbSession) -> RemnawaveSettingsOut:
     values = await cfg.get_many(
-        db, cfg.REMNAWAVE_URL, cfg.REMNAWAVE_TOKEN, cfg.REMNAWAVE_VERIFY_TLS
+        db,
+        cfg.REMNAWAVE_URL,
+        cfg.REMNAWAVE_TOKEN,
+        cfg.REMNAWAVE_VERIFY_TLS,
+        cfg.SUBSCRIPTION_REDIRECT_ENABLED,
     )
     token = values[cfg.REMNAWAVE_TOKEN]
     return RemnawaveSettingsOut(
@@ -44,6 +50,7 @@ async def get_remnawave(admin: CurrentAdmin, db: DbSession) -> RemnawaveSettings
         token_masked=mask(token) if token else None,
         verify_tls=values[cfg.REMNAWAVE_VERIFY_TLS] != "false",
         configured=bool(values[cfg.REMNAWAVE_URL] and token),
+        subscription_redirect_enabled=values[cfg.SUBSCRIPTION_REDIRECT_ENABLED] == "true",
     )
 
 
@@ -53,6 +60,11 @@ async def save_remnawave(
 ) -> RemnawaveSettingsOut:
     await cfg.set_(db, cfg.REMNAWAVE_URL, str(data.url).rstrip("/"))
     await cfg.set_(db, cfg.REMNAWAVE_VERIFY_TLS, "true" if data.verify_tls else "false")
+    await cfg.set_(
+        db,
+        cfg.SUBSCRIPTION_REDIRECT_ENABLED,
+        "true" if data.subscription_redirect_enabled else "false",
+    )
     if data.token:
         await cfg.set_(db, cfg.REMNAWAVE_TOKEN, data.token)
 
@@ -68,6 +80,10 @@ async def save_remnawave(
     await db.flush()
     # Настройки изменились — кэшированные клиенты держат старый токен.
     await remnawave_provider.close_all()
+    from shared import bus
+
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
     return await get_remnawave(admin, db)
 
 

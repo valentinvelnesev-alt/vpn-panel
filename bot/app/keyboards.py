@@ -9,12 +9,35 @@ Telegram не рендерит вообще), цвет — полем `style`, �
 
 from typing import Any
 
-from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    CopyTextButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from app.config import Config, discounted_kopeks, format_rub
 from app.icons import icon_id, style_or_none
 
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
+
+# Подписи кнопок нижней клавиатуры — они же условие в хендлерах.
+BTN_MENU = "Меню"
+BTN_HELP = "Помощь"
+
+
+def reply_menu() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура под полем ввода: «Меню» и «Помощь».
+
+    Иконок и цветов у неё быть не может — это возможности только у inline-
+    кнопок; здесь Telegram рисует обычный текст.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_HELP)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def _btn(
@@ -334,6 +357,15 @@ def wallet_menu(config: Config) -> InlineKeyboardMarkup:
             presets[:2],
             presets[2:],
             [_btn(config, "Другая сумма", callback_data="topup_custom", icon="edit")],
+            [_btn(config, "Назад", callback_data="menu", icon="back")],
+        ]
+    )
+
+
+def support_menu(config: Config) -> InlineKeyboardMarkup:
+    return _markup(
+        [
+            [_btn(config, "Написать в поддержку", url=config.support_url, icon="support", style="primary")],
             [_btn(config, "Назад", callback_data="menu", icon="back")],
         ]
     )
