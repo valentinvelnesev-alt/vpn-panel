@@ -172,25 +172,45 @@ class RemnawaveClient:
     async def get_user(self, ref: UserRef) -> User:
         return self._parse(User, await self._get(f"/api/users/{ref}"))
 
-    async def get_users_by_telegram_id(self, telegram_id: int) -> list[User]:
-        # /api/users/by-telegram-id удалён в новом API — используем stream
-        data = await self._get(
-            "/api/users/stream", params={"telegramId": str(telegram_id), "size": 100}
-        )
+    async def _stream(self, **params: Any) -> list[User]:
+        data = await self._get("/api/users/stream", params={"size": 500, **params})
         users = data.get("users", []) if isinstance(data, dict) else (data or [])
         return self._parse(_users, users)
+
+    async def get_users_by_telegram_id(self, telegram_id: int) -> list[User]:
+        """Поиск по Telegram ID.
+
+        До 2.9 для этого есть отдельный эндпоинт, в 2.9+ его убрали и
+        остался stream. Вдобавок stream у 2.8.1 игнорирует фильтр и отдаёт
+        всех подряд, поэтому результат в любом случае отсеиваем сами —
+        иначе на поиск по одному ID панель показывала бы всю базу.
+        """
+        users = await self._try_legacy_lookup(f"/api/users/by-telegram-id/{telegram_id}")
+        if users is None:
+            users = await self._stream(telegramId=str(telegram_id))
+        return [u for u in users if u.telegram_id == telegram_id]
+
+    async def _try_legacy_lookup(self, path: str) -> list[User] | None:
+        """Эндпоинт старых панелей. None — его тут нет, значит панель новая."""
+        try:
+            data = await self._get(path)
+        except RemnawaveError as exc:
+            if exc.status_code in (400, 404):
+                return None
+            raise
+        if data is None:
+            return None
+        return self._parse(_users, data if isinstance(data, list) else [data])
 
     async def get_users_by_username(self, username: str) -> list[User]:
         data = await self._get(f"/api/users/by-username/{username}")
         return self._parse(_users, [data] if isinstance(data, dict) else data or [])
 
     async def get_users_by_email(self, email: str) -> list[User]:
-        # /api/users/by-email удалён в новом API — используем stream
-        data = await self._get(
-            "/api/users/stream", params={"email": email, "size": 100}
-        )
-        users = data.get("users", []) if isinstance(data, dict) else (data or [])
-        return self._parse(_users, users)
+        users = await self._try_legacy_lookup(f"/api/users/by-email/{email}")
+        if users is None:
+            users = await self._stream(email=email)
+        return [u for u in users if (u.email or "").lower() == email.lower()]
 
     async def create_user(
         self,
