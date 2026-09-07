@@ -9,7 +9,15 @@ from app.services import telegram
 from app.services.telegram import TelegramError
 from shared import bus
 from shared.crypto import decrypt, encrypt, mask
-from shared.db.models import AuditLog, BotConfig, BotState, EmojiMode, Plan, PlanCategory
+from shared.db.models import (
+    AuditLog,
+    BotConfig,
+    BotState,
+    EmojiMode,
+    Plan,
+    PlanCategory,
+    TrafficPackage,
+)
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 
@@ -497,6 +505,95 @@ async def delete_plan(
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Тариф не найден")
     _audit(db, admin, "bot.plan.delete", request, plan_id=plan_id)
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+
+
+# ── Пакеты докупаемого трафика ────────────────────────────────────────
+class TrafficPackageIn(BaseModel):
+    title: str = Field(min_length=1, max_length=64)
+    traffic_gb: int = Field(ge=1, le=100_000)
+    price_rub: float = Field(ge=0, le=1_000_000)
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class TrafficPackageOut(TrafficPackageIn):
+    id: int
+
+
+def _package_out(row: TrafficPackage) -> TrafficPackageOut:
+    return TrafficPackageOut(
+        id=row.id,
+        title=row.title,
+        traffic_gb=row.traffic_gb,
+        price_rub=row.price_kopeks / 100,
+        is_active=row.is_active,
+        sort_order=row.sort_order,
+    )
+
+
+@router.get("/traffic-packages", response_model=list[TrafficPackageOut])
+async def list_traffic_packages(admin: CurrentAdmin, db: DbSession) -> list[TrafficPackageOut]:
+    rows = await db.scalars(
+        select(TrafficPackage).order_by(TrafficPackage.sort_order, TrafficPackage.traffic_gb)
+    )
+    return [_package_out(r) for r in rows]
+
+
+@router.post(
+    "/traffic-packages", response_model=TrafficPackageOut, status_code=status.HTTP_201_CREATED
+)
+async def create_traffic_package(
+    data: TrafficPackageIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> TrafficPackageOut:
+    row = TrafficPackage(
+        title=data.title,
+        traffic_gb=data.traffic_gb,
+        # Цены в копейках: float в деньгах рано или поздно теряет копейку.
+        price_kopeks=round(data.price_rub * 100),
+        is_active=data.is_active,
+        sort_order=data.sort_order,
+    )
+    db.add(row)
+    _audit(db, admin, "bot.traffic_package.create", request, title=data.title)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+    return _package_out(row)
+
+
+@router.put("/traffic-packages/{package_id}", response_model=TrafficPackageOut)
+async def update_traffic_package(
+    package_id: int,
+    data: TrafficPackageIn,
+    admin: CurrentAdmin,
+    db: DbSession,
+    request: Request,
+) -> TrafficPackageOut:
+    row = await db.get(TrafficPackage, package_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Пакет не найден")
+    row.title = data.title
+    row.traffic_gb = data.traffic_gb
+    row.price_kopeks = round(data.price_rub * 100)
+    row.is_active = data.is_active
+    row.sort_order = data.sort_order
+    _audit(db, admin, "bot.traffic_package.update", request, package_id=package_id)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+    return _package_out(row)
+
+
+@router.delete("/traffic-packages/{package_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_traffic_package(
+    package_id: int, admin: CurrentAdmin, db: DbSession, request: Request
+) -> None:
+    result = await db.execute(delete(TrafficPackage).where(TrafficPackage.id == package_id))
+    if result.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Пакет не найден")
+    _audit(db, admin, "bot.traffic_package.delete", request, package_id=package_id)
     await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
 

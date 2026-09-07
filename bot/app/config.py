@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.crypto import decrypt
 from shared.db.models import BotConfig, EmojiMode
 from shared.db.models import Plan as PlanRow
+from shared.db.models import TrafficPackage as TrafficPackageRow
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,36 @@ async def load_plan(db: AsyncSession, plan_id: int | None) -> PlanView | None:
         select(PlanRow).options(selectinload(PlanRow.category)).where(PlanRow.id == plan_id)
     )
     return plan_view(row) if row is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class TrafficPackageView:
+    id: int
+    title: str
+    traffic_gb: int
+    price_kopeks: int
+
+    @property
+    def traffic_bytes(self) -> int:
+        return self.traffic_gb * 1024**3
+
+
+def traffic_view(row: TrafficPackageRow) -> TrafficPackageView:
+    return TrafficPackageView(
+        id=row.id,
+        title=row.title,
+        traffic_gb=row.traffic_gb,
+        price_kopeks=row.price_kopeks,
+    )
+
+
+async def load_traffic_package(db: AsyncSession, package_id: int | None):
+    """Пакет по id, включая отключённый: начатая оплата должна довестись
+    до конца на изначальных условиях."""
+    if package_id is None:
+        return None
+    row = await db.get(TrafficPackageRow, package_id)
+    return traffic_view(row) if row is not None else None
 
 
 def plan_view(row: PlanRow) -> PlanView:
@@ -117,6 +148,7 @@ class Config:
     terms_url: str | None = None
 
     plans: list[PlanView] = field(default_factory=list)
+    traffic_packages: list[TrafficPackageView] = field(default_factory=list)
 
     remnawave_url: str | None = None
     remnawave_token: str | None = None
@@ -171,6 +203,9 @@ class Config:
     def plan(self, plan_id: int) -> PlanView | None:
         return next((p for p in self.plans if p.id == plan_id), None)
 
+    def traffic_package(self, package_id: int) -> TrafficPackageView | None:
+        return next((p for p in self.traffic_packages if p.id == package_id), None)
+
 
 async def load(db: AsyncSession) -> Config:
     row = await db.get(BotConfig, 1)
@@ -184,6 +219,12 @@ async def load(db: AsyncSession) -> Config:
         .options(selectinload(PlanRow.category))
         .where(PlanRow.is_active.is_(True))
         .order_by(PlanRow.sort_order, PlanRow.days)
+    )
+
+    packages = await db.scalars(
+        select(TrafficPackageRow)
+        .where(TrafficPackageRow.is_active.is_(True))
+        .order_by(TrafficPackageRow.sort_order, TrafficPackageRow.traffic_gb)
     )
 
     from shared.db.models import Setting
@@ -237,6 +278,7 @@ async def load(db: AsyncSession) -> Config:
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
         plans=[plan_view(p) for p in plans],
+        traffic_packages=[traffic_view(p) for p in packages],
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),
         remnawave_verify_tls=raw.get("remnawave_verify_tls") != "false",

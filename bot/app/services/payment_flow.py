@@ -53,6 +53,7 @@ async def create_external_payment(
     provider: PaymentProvider,
     plan_id: int | None = None,
     subscription_id: int | None = None,
+    traffic_package_id: int | None = None,
     description: str,
 ) -> tuple[Payment, str]:
     """Возвращает (запись платежа, ссылка на оплату).
@@ -76,6 +77,7 @@ async def create_external_payment(
                 purpose=purpose,
                 plan_id=plan_id,
                 subscription_id=subscription_id,
+                traffic_package_id=traffic_package_id,
             )
             db.add(payment)
             await db.flush()  # нужен payment.id для order_id

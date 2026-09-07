@@ -7,6 +7,7 @@ keyboards.py, выдача подписок в services/subscriptions.py, при
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -26,7 +27,13 @@ from aiogram.types import (
 from sqlalchemy import func, select
 
 from app import connection, keyboards, texts
-from app.config import Config, PlanView, discounted_kopeks, format_rub
+from app.config import (
+    Config,
+    PlanView,
+    TrafficPackageView,
+    discounted_kopeks,
+    format_rub,
+)
 from app.services import (
     payment_check,
     payment_flow,
@@ -580,37 +587,93 @@ async def _show_topup_providers(callback: CallbackQuery, config: Config, amount:
 
 
 # ── Оплата ────────────────────────────────────────────────────────────
+@dataclass(slots=True)
+class PayTarget:
+    """Что именно оплачивают. Ровно одно из plan/package заполнено, кроме
+    пополнения баланса, где не заполнено ничего."""
+
+    amount_kopeks: int
+    description: str
+    plan: PlanView | None = None
+    package: TrafficPackageView | None = None
+    subscription: BotSubscription | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.amount_kopeks > 0
+
+
+EMPTY_TARGET = PayTarget(amount_kopeks=0, description="")
+
+
 async def _resolve_pay_target(
     db, config: Config, user: BotUser, purpose: str, target: str
-):
-    """Разбирает `target` из callback_data в (plan, subscription|None, сумма, описание).
+) -> PayTarget:
+    """Разбирает `target` из callback_data.
 
-    purpose == "plan"  → target = "{plan_id}" — покупка НОВОГО ключа.
-    purpose == "renew" → target = "{subscription_id}-{plan_id}" — продление
-    конкретного существующего ключа (проверяем, что он принадлежит user).
-    purpose == "topup" → target = сумма в рублях, тариф/ключ не участвуют.
+    purpose == "plan"    → "{plan_id}" — покупка НОВОГО ключа.
+    purpose == "renew"   → "{subscription_id}-{plan_id}" — продление
+    конкретного ключа (проверяем, что он принадлежит пользователю).
+    purpose == "traffic" → "{subscription_id}-{package_id}" — докупка трафика.
+    purpose == "topup"   → сумма в рублях.
 
-    Сумма для тарифа — уже со скидкой пользователя (промокод).
+    Цена тарифа — со скидкой пользователя; на пакеты трафика скидка по
+    промокоду не распространяется, она обещана «на оплату тарифа».
     """
     if purpose == "topup":
-        return None, None, round(float(target) * 100), f"Пополнение баланса на {target} ₽"
+        return PayTarget(
+            amount_kopeks=round(float(target) * 100),
+            description=f"Пополнение баланса на {target} ₽",
+        )
+
+    async def own_subscription(raw_id: str) -> BotSubscription | None:
+        subscription = await db.get(BotSubscription, int(raw_id))
+        if subscription is None or subscription.user_id != user.id:
+            return None
+        return subscription
 
     if purpose == "renew":
         sub_id_str, _, plan_id_str = target.partition("-")
         plan = config.plan(int(plan_id_str))
-        if plan is None:
-            return None, None, 0, ""
-        subscription = await db.get(BotSubscription, int(sub_id_str))
-        if subscription is None or subscription.user_id != user.id:
-            return None, None, 0, ""
-        amount = discounted_kopeks(plan.price_kopeks, user.discount_percent)
-        return plan, subscription, amount, f"Продление «{plan.full_title}»"
+        subscription = await own_subscription(sub_id_str)
+        if plan is None or subscription is None:
+            return EMPTY_TARGET
+        return PayTarget(
+            amount_kopeks=discounted_kopeks(plan.price_kopeks, user.discount_percent),
+            description=f"Продление «{plan.full_title}»",
+            plan=plan,
+            subscription=subscription,
+        )
+
+    if purpose == "traffic":
+        sub_id_str, _, package_id_str = target.partition("-")
+        package = config.traffic_package(int(package_id_str))
+        subscription = await own_subscription(sub_id_str)
+        if package is None or subscription is None:
+            return EMPTY_TARGET
+        return PayTarget(
+            amount_kopeks=package.price_kopeks,
+            description=f"Докупка трафика: +{package.traffic_gb} ГБ",
+            package=package,
+            subscription=subscription,
+        )
 
     plan = config.plan(int(target))
     if plan is None:
-        return None, None, 0, ""
-    amount = discounted_kopeks(plan.price_kopeks, user.discount_percent)
-    return plan, None, amount, f"Оплата тарифа «{plan.full_title}»"
+        return EMPTY_TARGET
+    return PayTarget(
+        amount_kopeks=discounted_kopeks(plan.price_kopeks, user.discount_percent),
+        description=f"Оплата тарифа «{plan.full_title}»",
+        plan=plan,
+    )
+
+
+def _purpose_of(purpose: str) -> PaymentPurpose:
+    if purpose == "topup":
+        return PaymentPurpose.TOPUP
+    if purpose == "traffic":
+        return PaymentPurpose.TRAFFIC
+    return PaymentPurpose.PLAN
 
 
 @router.callback_query(F.data.startswith("pay:"))
@@ -632,23 +695,23 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
-            db, config, user, purpose, target
-        )
-        if purpose != "topup" and plan is None:
+        pay = await _resolve_pay_target(db, config, user, purpose, target)
+        if not pay.ok:
             await callback.answer("Тариф или ключ недоступен", show_alert=True)
             return
+        amount_kopeks, description = pay.amount_kopeks, pay.description
 
         try:
             payment, pay_url = await payment_flow.create_external_payment(
                 db,
                 config,
                 user,
-                purpose=PaymentPurpose.TOPUP if purpose == "topup" else PaymentPurpose.PLAN,
+                purpose=_purpose_of(purpose),
                 amount_kopeks=amount_kopeks,
                 provider=provider,
-                plan_id=plan.id if plan else None,
-                subscription_id=subscription.id if subscription else None,
+                plan_id=pay.plan.id if pay.plan else None,
+                subscription_id=pay.subscription.id if pay.subscription else None,
+                traffic_package_id=pay.package.id if pay.package else None,
                 description=description,
             )
         except payment_flow.PaymentFlowError as exc:
@@ -678,31 +741,62 @@ async def _pay_from_wallet(
     деньги). Реферальные начисления и уведомления — отдельно, после коммита."""
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
-            db, config, user, purpose, target
-        )
-        if plan is None:
+        pay = await _resolve_pay_target(db, config, user, purpose, target)
+        if not pay.ok or (pay.plan is None and pay.package is None):
             await callback.answer(
-                "Из баланса можно оплатить только тариф", show_alert=True
+                "Из баланса можно оплатить тариф или трафик", show_alert=True
             )
             return
+        amount_kopeks = pay.amount_kopeks
         try:
             await wallet.debit(
-                db, user, amount_kopeks, WalletTxType.PURCHASE, description=description
+                db, user, amount_kopeks, WalletTxType.PURCHASE, description=pay.description
             )
         except wallet.InsufficientFunds as exc:
             await callback.answer(str(exc), show_alert=True)
             return
 
         try:
-            if subscription is not None:
-                subscription = await subs.extend_subscription(
-                    db, config, subscription, plan, amount_kopeks=amount_kopeks
+            if pay.package is not None:
+                await subs.add_traffic(
+                    db,
+                    config,
+                    pay.subscription,
+                    pay.package,
+                    source="wallet",
+                    amount_kopeks=amount_kopeks,
                 )
+                done = t(
+                    config,
+                    "{@check} Оплачено с баланса. Добавлено {gb} ГБ трафика.",
+                    gb=pay.package.traffic_gb,
+                )
+                label = f"+{pay.package.traffic_gb} ГБ трафика"
+            elif pay.subscription is not None:
+                subscription = await subs.extend_subscription(
+                    db, config, pay.subscription, pay.plan, amount_kopeks=amount_kopeks
+                )
+                done = t(
+                    config,
+                    "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
+                    title=pay.plan.title,
+                    until=_date(subscription.expire_at),
+                )
+                label = pay.plan.full_title
             else:
                 subscription = await subs.create_subscription(
-                    db, config, user, plan, source="wallet", amount_kopeks=amount_kopeks
+                    db, config, user, pay.plan, source="wallet", amount_kopeks=amount_kopeks
                 )
+                done = t(
+                    config,
+                    "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
+                    title=pay.plan.title,
+                    until=_date(subscription.expire_at),
+                )
+                label = pay.plan.full_title
+        except subs.TrafficUnavailable as exc:
+            await callback.answer(str(exc), show_alert=True)
+            raise  # откатывает списание вместе с сессией
         except RemnawaveError as exc:
             log.error("Оплата с баланса: Remnawave недоступна: %s", exc)
             # Исключение откатит списание вместе с сессией.
@@ -711,23 +805,13 @@ async def _pay_from_wallet(
                 show_alert=True,
             )
             raise
-        user.discount_percent = 0
-        until = subscription.expire_at
+        if pay.plan is not None:
+            user.discount_percent = 0
         user_id = user.id
-        plan_title = plan.full_title
 
-    await safe_edit(
-        callback.message,
-        t(
-            config,
-            "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
-            title=plan.title,
-            until=_date(until),
-        ),
-        keyboards.back_to_menu(config),
-    )
+    await safe_edit(callback.message, done, keyboards.back_to_menu(config))
     await callback.answer()
-    await payment_processor.after_purchase_effects(config, user_id, amount_kopeks, plan_title)
+    await payment_processor.after_purchase_effects(config, user_id, amount_kopeks, label)
 
 
 async def _pay_with_stars(
@@ -742,20 +826,20 @@ async def _pay_with_stars(
 
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
-        plan, subscription, amount_kopeks, description = await _resolve_pay_target(
-            db, config, user, purpose, target
-        )
-        if purpose != "topup" and plan is None:
+        pay = await _resolve_pay_target(db, config, user, purpose, target)
+        if not pay.ok:
             await callback.answer("Тариф или ключ недоступен", show_alert=True)
             return
+        amount_kopeks, description = pay.amount_kopeks, pay.description
         payment = Payment(
             user_id=user.id,
             provider=PaymentProvider.STARS,
             external_id=f"stars-{uuid4()}",
             amount_kopeks=amount_kopeks,
-            purpose=PaymentPurpose.TOPUP if purpose == "topup" else PaymentPurpose.PLAN,
-            plan_id=plan.id if plan else None,
-            subscription_id=subscription.id if subscription else None,
+            purpose=_purpose_of(purpose),
+            plan_id=pay.plan.id if pay.plan else None,
+            subscription_id=pay.subscription.id if pay.subscription else None,
+            traffic_package_id=pay.package.id if pay.package else None,
         )
         db.add(payment)
         await db.flush()
@@ -841,21 +925,22 @@ async def _legacy_stars_payment(db, config: Config, message: Message, payload: s
     except ValueError:
         return None
     user = await subs.get_or_create_user(db, message.from_user.id)
-    plan, subscription, amount_kopeks, _ = await _resolve_pay_target(
-        db, config, user, data.get("purpose", "plan"), str(data.get("target", ""))
-    )
-    if data.get("purpose") == "topup":
+    purpose = data.get("purpose", "plan")
+    pay = await _resolve_pay_target(db, config, user, purpose, str(data.get("target", "")))
+    amount_kopeks = pay.amount_kopeks
+    if purpose == "topup":
         amount_kopeks = round(message.successful_payment.total_amount * stars.RUB_PER_STAR * 100)
-    elif plan is None:
+    elif not pay.ok:
         return None
     payment = Payment(
         user_id=user.id,
         provider=PaymentProvider.STARS,
         external_id=f"stars-{uuid4()}",
         amount_kopeks=amount_kopeks,
-        purpose=PaymentPurpose.TOPUP if data.get("purpose") == "topup" else PaymentPurpose.PLAN,
-        plan_id=plan.id if plan else None,
-        subscription_id=subscription.id if subscription else None,
+        purpose=_purpose_of(purpose),
+        plan_id=pay.plan.id if pay.plan else None,
+        subscription_id=pay.subscription.id if pay.subscription else None,
+        traffic_package_id=pay.package.id if pay.package else None,
     )
     db.add(payment)
     await db.flush()
@@ -1047,11 +1132,74 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
         ]
 
     auto_renew = auto_renew_on if plan_row is not None else None
+    # Докупка трафика имеет смысл только там, где лимит вообще есть:
+    # к безлимиту прибавлять нечего.
+    can_buy_traffic = bool(
+        config.traffic_packages and usage is not None and usage[1] > 0
+    )
     await safe_edit(
         callback.message,
         "\n".join(lines),
         keyboards.subscription_detail_menu(
-            config, subscription_id, has_url=bool(url), auto_renew=auto_renew
+            config,
+            subscription_id,
+            has_url=bool(url),
+            auto_renew=auto_renew,
+            can_buy_traffic=can_buy_traffic,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subtraffic:"))
+async def cb_traffic_packages(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+    if subscription is None:
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+    if not config.traffic_packages:
+        await callback.answer("Пакеты трафика пока не настроены", show_alert=True)
+        return
+
+    await safe_edit(
+        callback.message,
+        t(
+            config,
+            "{@traffic} <b>Докупить трафик</b>\n\n"
+            "Пакет добавляется к текущему лимиту подписки и не сгорает при продлении.\n\n"
+            "Выберите объём:",
+        ),
+        keyboards.traffic_packages_menu(config, subscription_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pt:"))
+async def cb_traffic_pick(callback: CallbackQuery, config: Config) -> None:
+    _, raw_id, raw_package = callback.data.split(":", 2)
+    package = config.traffic_package(int(raw_package))
+    if package is None:
+        await callback.answer("Пакет больше не доступен", show_alert=True)
+        return
+    if not config.any_payment_ready:
+        await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
+        return
+
+    await safe_edit(
+        callback.message,
+        t(
+            config,
+            "{@traffic} <b>+{gb} ГБ трафика</b>\n\nК оплате: <b>{price}</b>\n\nСпособ оплаты:",
+            gb=package.traffic_gb,
+            price=format_rub(package.price_kopeks),
+        ),
+        keyboards.providers_menu(
+            config,
+            purpose="traffic",
+            target=f"{raw_id}-{package.id}",
+            back=f"subtraffic:{raw_id}",
         ),
     )
     await callback.answer()

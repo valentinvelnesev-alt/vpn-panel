@@ -36,6 +36,15 @@ PLANS = [
     )
 ]
 
+PACKAGES = [
+    __import__("app.config", fromlist=["TrafficPackageView"]).TrafficPackageView(
+        id=1, title="50 ГБ", traffic_gb=50, price_kopeks=9900
+    ),
+    __import__("app.config", fromlist=["TrafficPackageView"]).TrafficPackageView(
+        id=2, title="200 ГБ", traffic_gb=200, price_kopeks=29900
+    ),
+]
+
 CONFIG = Config(
     token="1:x",
     enabled=True,
@@ -53,6 +62,7 @@ CONFIG = Config(
     trial_hwid_limit=3,
     referral_enabled=True,
     plans=PLANS,
+    traffic_packages=PACKAGES,
     privacy_policy_url="https://example.com/p",
     terms_url="https://example.com/t",
     platega_enabled=True,
@@ -92,7 +102,13 @@ def _all_markups() -> dict[str, InlineKeyboardMarkup]:
             CONFIG, [_Sub(7)], {7: "1 месяц"}
         ),
         "subscriptions_empty": keyboards.subscriptions_menu(CONFIG, [], {}),
-        "detail": keyboards.subscription_detail_menu(CONFIG, 7, has_url=True, auto_renew=True),
+        "detail": keyboards.subscription_detail_menu(
+            CONFIG, 7, has_url=True, auto_renew=True, can_buy_traffic=True
+        ),
+        "traffic_packages": keyboards.traffic_packages_menu(CONFIG, 7),
+        "providers_traffic": keyboards.providers_menu(
+            CONFIG, purpose="traffic", target="7-1", back="subtraffic:7"
+        ),
         "detail_trial": keyboards.subscription_detail_menu(CONFIG, 7, has_url=False, auto_renew=None),
         "devices": keyboards.devices_menu(CONFIG, True, subscription_id=7),
         "devices_empty": keyboards.devices_menu(CONFIG, False, subscription_id=7),
@@ -275,3 +291,23 @@ def test_instruction_keyboard_uses_redirect_when_enabled() -> None:
 
     assert connect_button(False) == SUB_URL
     assert connect_button(True).startswith("https://sub.luxinet.ru/miniapp/redirect.html?url=")
+
+
+def test_traffic_button_hidden_without_packages() -> None:
+    """Кнопки в никуда быть не должно: нет пакетов — нет кнопки."""
+    labels = [
+        b.text
+        for row in keyboards.subscription_detail_menu(
+            CONFIG, 7, has_url=True, auto_renew=True, can_buy_traffic=False
+        ).inline_keyboard
+        for b in row
+    ]
+    assert "Докупить трафик" not in labels
+    with_traffic = [
+        b.text
+        for row in keyboards.subscription_detail_menu(
+            CONFIG, 7, has_url=True, auto_renew=True, can_buy_traffic=True
+        ).inline_keyboard
+        for b in row
+    ]
+    assert "Докупить трафик" in with_traffic

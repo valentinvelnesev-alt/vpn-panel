@@ -588,3 +588,136 @@ async def test_purchase_history_keeps_plan_name(db, config, remote) -> None:
     await db.flush()
     purchase = await db.scalar(select(Purchase).where(Purchase.user_id == user.id))
     assert purchase.plan_title == "Месяц"
+
+
+# ── Докупка трафика ───────────────────────────────────────────────────
+PACKAGE = __import__("app.config", fromlist=["TrafficPackageView"]).TrafficPackageView(
+    id=1, title="50 ГБ", traffic_gb=50, price_kopeks=9900
+)
+
+
+@pytest.fixture
+def remote_with_limit(monkeypatch):
+    """Remnawave, где у ключа есть лимит трафика."""
+    calls: list[tuple[str, dict]] = []
+    state = {"limit": 100 * 1024**3}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        body = json.loads(request.content) if request.content else {}
+        calls.append((f"{request.method} {request.url.path}", body))
+        if request.method == "PATCH" and "trafficLimitBytes" in body:
+            state["limit"] = body["trafficLimitBytes"]
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    **REMOTE,
+                    "id": 11,
+                    "trafficLimitBytes": state["limit"],
+                    "expireAt": body.get("expireAt"),
+                }
+            },
+        )
+
+    from shared.remnawave import client as rw
+
+    original = rw.RemnawaveClient.__init__
+
+    def patched(self, base_url, token, **kwargs):
+        original(self, base_url, token, **kwargs)
+        self._client = httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", patched)
+    return calls, state
+
+
+async def test_add_traffic_raises_limit_by_package_size(db, config, remote_with_limit) -> None:
+    """Отдельной операции «добавить трафик» в Remnawave нет — проверяем,
+    что лимит именно прибавляется, а не перезаписывается размером пакета."""
+    calls, _ = remote_with_limit
+    user = await subs.get_or_create_user(db, 777)
+    sub = BotSubscription(user_id=user.id, remnawave_id=11, username="tg_777", expire_at=datetime.now(UTC))
+    db.add(sub)
+    await db.flush()
+
+    new_limit = await subs.add_traffic(db, config, sub, PACKAGE, source="wallet")
+    assert new_limit == 150 * 1024**3
+
+    method, body = calls[-1]
+    assert method == "PATCH /api/users"
+    assert body["trafficLimitBytes"] == 150 * 1024**3
+    # Срок и сквады докупка трафика не трогает.
+    assert "expireAt" not in body and "activeInternalSquads" not in body
+
+    purchase = await db.scalar(
+        select(Purchase).where(Purchase.subscription_id == sub.id)
+    )
+    assert purchase.plan_title == "+50 ГБ трафика"
+    assert purchase.days == 0
+    assert purchase.amount_kopeks == 9900
+
+
+async def test_add_traffic_refused_on_unlimited_key(db, config, remote) -> None:
+    """У безлимитной подписки лимит равен нулю: прибавлять к нему нечего,
+    иначе безлимит превратился бы в 50 ГБ."""
+    user = await subs.get_or_create_user(db, 777)
+    sub = BotSubscription(user_id=user.id, remnawave_id=11, username="tg_777")
+    db.add(sub)
+    await db.flush()
+
+    with pytest.raises(subs.TrafficUnavailable):
+        await subs.add_traffic(db, config, sub, PACKAGE, source="wallet")
+    assert (await db.scalar(select(Purchase))) is None
+
+
+async def test_traffic_payment_is_applied_once(db, engine, config, remote_with_limit, monkeypatch) -> None:
+    from app import config as config_module
+    from app.services import payment_processor
+    from shared.db.models import PaymentStatus, TrafficPackage
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    import shared.db.session as shared_session
+
+    monkeypatch.setattr(shared_session, "SessionLocal", maker)
+    monkeypatch.setattr(payment_processor, "session", shared_session.session)
+
+    async def fake_load(_db):
+        return config
+
+    monkeypatch.setattr(config_module, "load", fake_load)
+    sent: list = []
+    monkeypatch.setattr(
+        payment_processor, "send", lambda *a, **kw: sent.append(a) or _true()
+    )
+
+    async def _true():
+        return True
+
+    db.add(TrafficPackage(id=1, title="50 ГБ", traffic_gb=50, price_kopeks=9900))
+    user = await subs.get_or_create_user(db, 777)
+    sub = BotSubscription(user_id=user.id, remnawave_id=11, username="tg_777")
+    db.add(sub)
+    await db.flush()
+    payment = Payment(
+        user_id=user.id,
+        provider=PaymentProvider.STARS,
+        external_id="stars-traffic-1",
+        amount_kopeks=9900,
+        purpose=PaymentPurpose.TRAFFIC,
+        subscription_id=sub.id,
+        traffic_package_id=1,
+        status=PaymentStatus.PAID,
+        paid_at=datetime.now(UTC),
+    )
+    db.add(payment)
+    await db.commit()
+
+    await payment_processor.handle(payment.id)
+    await payment_processor.handle(payment.id)  # повтор из шины
+
+    _, state = remote_with_limit
+    assert state["limit"] == 150 * 1024**3  # прибавилось ровно один раз
+    async with maker() as s:
+        assert (await s.get(Payment, payment.id)).applied_at is not None

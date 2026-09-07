@@ -279,6 +279,28 @@ class Plan(Base, TimestampMixin):
         return self.price_kopeks / 100
 
 
+class TrafficPackage(Base, TimestampMixin):
+    """Пакет докупаемого трафика: сколько гигабайт и за сколько.
+
+    Remnawave не умеет «добавить трафик» отдельной операцией — есть только
+    лимит пользователя, поэтому покупка поднимает `trafficLimitBytes` на
+    размер пакета (см. app/services/subscriptions.py).
+    """
+
+    __tablename__ = "bot_traffic_packages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(64), nullable=False)
+    traffic_gb: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_kopeks: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    @property
+    def traffic_bytes(self) -> int:
+        return self.traffic_gb * 1024**3
+
+
 class BotUser(Base, TimestampMixin):
     """Пользователь бота. Связь с Remnawave — по uuid, выданному при покупке.
 
@@ -454,6 +476,7 @@ class PaymentProvider(StrEnum):
 class PaymentPurpose(StrEnum):
     TOPUP = "topup"
     PLAN = "plan"
+    TRAFFIC = "traffic"
 
 
 class PaymentStatus(StrEnum):
@@ -528,6 +551,10 @@ class Payment(Base, TimestampMixin):
     # когда придёт подтверждение оплаты.
     subscription_id: Mapped[int | None] = mapped_column(
         ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
+    )
+    # Заполнено только для докупки трафика.
+    traffic_package_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_traffic_packages.id", ondelete="SET NULL"), default=None
     )
     status: Mapped[PaymentStatus] = mapped_column(
         String(16), default=PaymentStatus.PENDING, nullable=False
