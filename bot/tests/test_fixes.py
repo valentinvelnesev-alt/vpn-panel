@@ -830,3 +830,41 @@ def test_stored_ref_round_trip() -> None:
     assert stored_ref("b2c0adcb-0dac") == "b2c0adcb-0dac"
     assert stored_ref(None) is None
     assert stored_ref("") is None
+
+
+async def test_telegram_lookup_filters_results(config, monkeypatch) -> None:
+    """У 2.8.1 stream игнорирует фильтр и отдаёт всю базу — клиент обязан
+    отсеять чужих, иначе поиск в панели показывает всех подряд."""
+    import json
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if "by-telegram-id" in request.url.path:
+            return httpx.Response(404, json={"message": "not found"})
+        everyone = [
+            {**OLD_PANEL_USER, "uuid": "u1", "username": "a", "telegramId": 111},
+            {**OLD_PANEL_USER, "uuid": "u2", "username": "b", "telegramId": 222},
+        ]
+        return httpx.Response(200, json={"response": {"users": everyone, "total": 2}})
+
+    from shared.remnawave import client as rw
+
+    original = rw.RemnawaveClient.__init__
+
+    def patched(self, base_url, token, **kwargs):
+        original(self, base_url, token, **kwargs)
+        self._client = httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", patched)
+
+    client = subs.client_for(config)
+    try:
+        found = await client.get_users_by_telegram_id(222)
+    finally:
+        await client.aclose()
+
+    assert [u.username for u in found] == ["b"]
+    assert any("by-telegram-id" in p for p in seen)  # сперва пробуем старый путь
+    assert any("stream" in p for p in seen)  # затем новый
