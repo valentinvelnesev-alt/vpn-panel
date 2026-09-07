@@ -166,7 +166,7 @@ export default function Users() {
                   const expiry = untilExpiry(user.expire_at)
                   return (
                     <tr
-                      key={user.id}
+                      key={user.ref}
                       onClick={() => setEditing(user)}
                       className="cursor-pointer transition-colors hover:bg-surface-hover"
                     >

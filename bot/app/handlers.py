@@ -1069,7 +1069,7 @@ def _gb(value: int) -> str:
     return f"{value / 1024 ** 3:.2f} ГБ"
 
 
-async def _remote_usage(config: Config, remnawave_id: int) -> tuple[int, int, int, int] | None:
+async def _remote_usage(config: Config, ref: int | str) -> tuple[int, int, int, int] | None:
     """(использовано, лимит трафика, устройств подключено, лимит устройств).
 
     Данные живут в Remnawave, а не у нас: локально мы храним только срок и
@@ -1077,12 +1077,12 @@ async def _remote_usage(config: Config, remnawave_id: int) -> tuple[int, int, in
     try:
         client = subs.client_for(config)
         try:
-            remote = await client.get_user(remnawave_id)
-            devices = await client.get_devices(remnawave_id)
+            remote = await client.get_user(ref)
+            devices = await client.get_devices(ref)
         finally:
             await client.aclose()
     except RemnawaveError as exc:
-        log.warning("Не удалось получить данные ключа %s: %s", remnawave_id, exc)
+        log.warning("Не удалось получить данные ключа %s: %s", ref, exc)
         return None
     return (
         remote.used_traffic_bytes,
@@ -1100,7 +1100,7 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
             return
         title = (await _plan_titles(db, [subscription]))[subscription.id]
         plan_row = await db.get(Plan, subscription.plan_id) if subscription.plan_id else None
-        remnawave_id = subscription.remnawave_id
+        remote_ref = subscription.remote_ref
         url = subscription.subscription_url
         expire_at = subscription.expire_at
         auto_renew_on = subscription.auto_renew
@@ -1112,7 +1112,7 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
         f"Истекает: <b>{_date(expire_at)}</b> ({_left(expire_at)})",
     ]
 
-    usage = await _remote_usage(config, remnawave_id)
+    usage = await _remote_usage(config, remote_ref)
     if usage is not None:
         used, limit, devices_used, devices_limit = usage
         traffic = f"{_gb(used)} / " + (_gb(limit) if limit else "∞ (безлимит)")
@@ -1412,7 +1412,7 @@ async def _render_devices(callback: CallbackQuery, config: Config, subscription_
     try:
         client = subs.client_for(config)
         try:
-            devices = await client.get_devices(subscription.remnawave_id)
+            devices = await client.get_devices(subscription.remote_ref)
         finally:
             await client.aclose()
     except RemnawaveError:
@@ -1454,7 +1454,7 @@ async def cb_subscription_devices_reset(callback: CallbackQuery, config: Config)
     try:
         client = subs.client_for(config)
         try:
-            await client.delete_all_devices(subscription.remnawave_id)
+            await client.delete_all_devices(subscription.remote_ref)
         finally:
             await client.aclose()
     except RemnawaveError:

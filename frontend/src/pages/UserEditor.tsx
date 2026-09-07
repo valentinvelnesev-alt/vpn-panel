@@ -55,7 +55,7 @@ function Section({
   )
 }
 
-function DevicesSection({ userId }: { userId: number }) {
+function DevicesSection({ userId }: { userId: string }) {
   const uuid = userId  // alias for queries below
   const queryClient = useQueryClient()
   const { data: devices, isPending } = useQuery({
@@ -151,7 +151,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
       }
       if (form.expire_at) payload.expire_at = new Date(form.expire_at).toISOString()
       if (form.telegram_id) payload.telegram_id = Number(form.telegram_id)
-      return panel.updateUser(user.id, payload)
+      return panel.updateUser(user.ref, payload)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] })
@@ -161,7 +161,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
   })
 
   const extend = useMutation({
-    mutationFn: (days: number) => panel.extendUser(user.id, days),
+    mutationFn: (days: number) => panel.extendUser(user.ref, days),
     onSuccess: (updated) => {
       set('expire_at', toLocalInput(updated.expire_at))
       queryClient.invalidateQueries({ queryKey: ['users'] })
@@ -372,7 +372,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
         </Section>
 
         <div className="lg:col-span-2">
-          <DevicesSection userId={user.id} />
+          <DevicesSection userId={user.ref} />
         </div>
       </div>
     </Modal>

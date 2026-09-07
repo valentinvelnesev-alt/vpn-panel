@@ -3,13 +3,20 @@
 Все ответы Remnawave завёрнуты в {"response": …} — метод `_request`
 разворачивает это один раз, чтобы вызывающий код не думал об обёртке.
 
-Изменения API >= 2.9:
-  - User.uuid убран, первичный ключ теперь User.id (int)
-  - /api/users/{userId} принимает числовой id
-  - /api/users/by-telegram-id удалён → используем /api/users/stream?telegramId=
-  - /api/users/by-email удалён → используем /api/users/stream?email=
-  - bulk-операции принимают userIds (list[int]) вместо uuids (list[str])
-  - PATCH /api/users принимает id (int), не uuid
+Клиент работает и со старыми, и с новыми панелями. До версии 2.9
+пользователь адресуется строковым `uuid`, начиная с 2.9 — числовым `id`:
+
+    до 2.9                          с 2.9
+    /api/users/{uuid}               /api/users/{userId}
+    PATCH {"uuid": …}               PATCH {"id": …}
+    /api/hwid/devices/{userUuid}    /api/hwid/devices/{userId}
+    {"userUuid": …}                 {"userId": …}
+    bulk {"uuids": [...]}           bulk {"userIds": [...]}
+
+Версия нигде не настраивается: старые панели отдают в ответе оба поля,
+новые — только `id`, поэтому нужный вариант определяется по типу самого
+идентификатора (см. `_ref_field`). Путь при этом одинаковый для обеих
+версий, различаются только имена полей в телах запросов.
 """
 
 import logging
@@ -34,6 +41,16 @@ class RemnawaveError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+# Идентификатор пользователя: uuid (старые панели) или id (новые).
+UserRef = int | str
+
+
+def _ref_field(ref: UserRef, *, uuid_name: str = "uuid", id_name: str = "id") -> dict[str, Any]:
+    """Имя поля зависит от того, чем адресуем: строка — это uuid старой
+    панели, число — id новой."""
+    return {uuid_name: ref} if isinstance(ref, str) else {id_name: ref}
 
 
 class RemnawaveClient:
@@ -152,8 +169,8 @@ class RemnawaveClient:
         data = await self._get("/api/users", params={"start": start, "size": size})
         return self._parse(UserPage, data)
 
-    async def get_user(self, user_id: int) -> User:
-        return self._parse(User, await self._get(f"/api/users/{user_id}"))
+    async def get_user(self, ref: UserRef) -> User:
+        return self._parse(User, await self._get(f"/api/users/{ref}"))
 
     async def get_users_by_telegram_id(self, telegram_id: int) -> list[User]:
         # /api/users/by-telegram-id удалён в новом API — используем stream
@@ -208,44 +225,50 @@ class RemnawaveClient:
 
         return self._parse(User, await self._post("/api/users", json=payload))
 
-    async def update_user(self, user_id: int, **fields: Any) -> User:
-        """Частичное обновление. user_id — целочисленный id пользователя."""
-        payload = {"id": user_id, **fields}
+    async def update_user(self, ref: UserRef, **fields: Any) -> User:
+        """Частичное обновление. ref — uuid (старые панели) или id (новые)."""
+        payload = {**_ref_field(ref), **fields}
         return self._parse(User, await self._patch("/api/users", json=payload))
 
-    async def extend_expiration(self, user_id: int, new_expire_at: datetime) -> User:
+    async def extend_expiration(self, ref: UserRef, new_expire_at: datetime) -> User:
         return await self.update_user(
-            user_id, expireAt=new_expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            ref, expireAt=new_expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         )
 
-    async def set_status(self, user_id: int, status: str) -> User:
-        return await self.update_user(user_id, status=status)
+    async def set_status(self, ref: UserRef, status: str) -> User:
+        return await self.update_user(ref, status=status)
 
-    async def reset_traffic(self, user_id: int) -> None:
+    async def reset_traffic(self, ref: UserRef) -> None:
         """Сброс использованного трафика — при продлении тарифа с лимитом,
         иначе клиент в статусе LIMITED остаётся без доступа после оплаты."""
-        await self._post(f"/api/users/{user_id}/actions/reset-traffic")
+        await self._post(f"/api/users/{ref}/actions/reset-traffic")
 
     # ── Массовые операции ─────────────────────────────────────────────
-    async def bulk_extend_expiration(self, user_ids: list[int], days: int) -> None:
+    @staticmethod
+    def _bulk_field(refs: list[UserRef]) -> dict[str, Any]:
+        """У старых панелей список называется uuids, у новых — userIds."""
+        key = "uuids" if refs and isinstance(refs[0], str) else "userIds"
+        return {key: refs}
+
+    async def bulk_extend_expiration(self, refs: list[UserRef], days: int) -> None:
         await self._post(
             "/api/users/bulk/extend-expiration-date",
-            json={"userIds": user_ids, "extendDays": days},
+            json={**self._bulk_field(refs), "extendDays": days},
         )
 
-    async def bulk_reset_traffic(self, user_ids: list[int]) -> None:
-        await self._post("/api/users/bulk/reset-traffic", json={"userIds": user_ids})
+    async def bulk_reset_traffic(self, refs: list[UserRef]) -> None:
+        await self._post("/api/users/bulk/reset-traffic", json=self._bulk_field(refs))
 
     async def bulk_update_squads(
-        self, user_ids: list[int], internal_squad_uuids: list[str]
+        self, refs: list[UserRef], internal_squad_uuids: list[str]
     ) -> None:
         await self._post(
             "/api/users/bulk/update-squads",
-            json={"userIds": user_ids, "activeInternalSquads": internal_squad_uuids},
+            json={**self._bulk_field(refs), "activeInternalSquads": internal_squad_uuids},
         )
 
-    async def bulk_delete(self, user_ids: list[int]) -> None:
-        await self._post("/api/users/bulk/delete", json={"userIds": user_ids})
+    async def bulk_delete(self, refs: list[UserRef]) -> None:
+        await self._post("/api/users/bulk/delete", json=self._bulk_field(refs))
 
     # ── Сквады ────────────────────────────────────────────────────────
     async def get_internal_squads(self) -> list[dict[str, Any]]:
@@ -255,18 +278,22 @@ class RemnawaveClient:
         return data or []
 
     # ── Устройства (HWID) ─────────────────────────────────────────────
-    async def get_devices(self, user_id: int) -> list[Device]:
-        data = await self._get(f"/api/hwid/devices/{user_id}")
+    async def get_devices(self, ref: UserRef) -> list[Device]:
+        data = await self._get(f"/api/hwid/devices/{ref}")
         items = data.get("devices", []) if isinstance(data, dict) else (data or [])
         return self._parse(_devices, items)
 
-    async def delete_device(self, user_id: int, hwid: str) -> None:
+    async def delete_device(self, ref: UserRef, hwid: str) -> None:
         await self._post(
-            "/api/hwid/devices/delete", json={"userId": user_id, "hwid": hwid}
+            "/api/hwid/devices/delete",
+            json={**_ref_field(ref, uuid_name="userUuid", id_name="userId"), "hwid": hwid},
         )
 
-    async def delete_all_devices(self, user_id: int) -> None:
-        await self._post("/api/hwid/devices/delete-all", json={"userId": user_id})
+    async def delete_all_devices(self, ref: UserRef) -> None:
+        await self._post(
+            "/api/hwid/devices/delete-all",
+            json=_ref_field(ref, uuid_name="userUuid", id_name="userId"),
+        )
 
 
 def _extract_error(response: httpx.Response) -> str:

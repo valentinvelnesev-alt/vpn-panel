@@ -17,7 +17,8 @@ from app.services import referral
 from app.services.notify import send as notify_send
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
-from shared.sync import refresh_user_summary
+from shared.remnawave.models import User as RemoteUser
+from shared.sync import refresh_user_summary, stored_ref
 
 log = logging.getLogger("bot.subscriptions")
 
@@ -50,7 +51,11 @@ async def _create_or_adopt(client: RemnawaveClient, **kwargs):
         if not existing:
             raise
         remote = existing[0]
-        log.warning("Remnawave: username %s уже занят — подхватываю аккаунт id=%s", kwargs["username"], remote.id)
+        log.warning(
+            "Remnawave: username %s уже занят — подхватываю аккаунт %s",
+            kwargs["username"],
+            remote.ref,
+        )
         fields: dict = {
             "expireAt": kwargs["expire_at"].strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "status": "ACTIVE",
@@ -63,18 +68,18 @@ async def _create_or_adopt(client: RemnawaveClient, **kwargs):
             fields["telegramId"] = kwargs["telegram_id"]
         if kwargs.get("description"):
             fields["description"] = kwargs["description"]
-        return await client.update_user(remote.id, **fields)
+        return await client.update_user(remote.ref, **fields)
 
 
-async def _reset_traffic_if_limited(client: RemnawaveClient, user_id: int, plan: PlanView) -> None:
+async def _reset_traffic_if_limited(client: RemnawaveClient, ref, plan: PlanView) -> None:
     """Тариф с лимитом трафика: при оплате счётчик обнуляется, иначе
     клиент в LIMITED так и останется без доступа."""
     if plan.traffic_limit_bytes <= 0:
         return
     try:
-        await client.reset_traffic(user_id)
+        await client.reset_traffic(ref)
     except RemnawaveError as exc:
-        log.warning("Не удалось сбросить трафик пользователю %s: %s", user_id, exc)
+        log.warning("Не удалось сбросить трафик пользователю %s: %s", ref, exc)
 
 
 async def get_or_create_user(
@@ -141,8 +146,7 @@ async def _mirror_subscription(
     db: AsyncSession,
     user: BotUser,
     *,
-    remnawave_id: int,
-    username: str,
+    remote: RemoteUser,
     subscription_url: str | None,
     expire_at: datetime | None,
     plan_id: int | None,
@@ -154,12 +158,24 @@ async def _mirror_subscription(
 
     Нужно, чтобы «Мои подписки» показывал основной ключ наравне с
     дополнительными, купленными через `create_subscription`."""
-    row = await db.scalar(
-        select(BotSubscription).where(BotSubscription.remnawave_id == remnawave_id)
-    )
+    row = None
+    if remote.uuid:
+        row = await db.scalar(
+            select(BotSubscription).where(BotSubscription.remnawave_uuid == remote.uuid)
+        )
+    if row is None and remote.id is not None:
+        row = await db.scalar(
+            select(BotSubscription).where(BotSubscription.remnawave_id == remote.id)
+        )
     if row is None:
-        row = BotSubscription(user_id=user.id, remnawave_id=remnawave_id, username=username)
+        row = BotSubscription(
+            user_id=user.id, remnawave_id=remote.id or 0, username=remote.username
+        )
         db.add(row)
+    if remote.uuid:
+        row.remnawave_uuid = remote.uuid
+    if remote.id is not None:
+        row.remnawave_id = remote.id
     row.subscription_url = subscription_url
     row.expire_at = expire_at
     if plan_id is not None:
@@ -193,7 +209,7 @@ async def grant(
     try:
         if user.remnawave_uuid:
             remote = await client.update_user(
-                int(user.remnawave_uuid),
+                stored_ref(user.remnawave_uuid),
                 expireAt=expire_at.isoformat(),
                 status="ACTIVE",
                 activeInternalSquads=squad_uuids,
@@ -214,15 +230,14 @@ async def grant(
     finally:
         await client.aclose()
 
-    user.remnawave_uuid = str(remote.id)
+    user.remnawave_uuid = str(remote.ref)
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 
     mirrored = await _mirror_subscription(
         db,
         user,
-        remnawave_id=remote.id,
-        username=remote.username,
+        remote=remote,
         subscription_url=user.subscription_url,
         expire_at=user.expire_at,
         plan_id=plan_id,
@@ -306,8 +321,7 @@ async def grant_trial(db: AsyncSession, config: Config, user: BotUser) -> BotUse
     mirrored = await _mirror_subscription(
         db,
         user,
-        remnawave_id=remote.id,
-        username=remote.username,
+        remote=remote,
         subscription_url=remote.subscription_url,
         expire_at=remote.expire_at or expire_at,
         plan_id=None,
@@ -344,7 +358,7 @@ async def grant_bonus_days(
     client = client_for(config)
     try:
         if user.remnawave_uuid:
-            remote = await client.extend_expiration(int(user.remnawave_uuid), expire_at)
+            remote = await client.extend_expiration(stored_ref(user.remnawave_uuid), expire_at)
         else:
             remote = await _create_or_adopt(
                 client,
@@ -358,15 +372,14 @@ async def grant_bonus_days(
     finally:
         await client.aclose()
 
-    user.remnawave_uuid = str(remote.id)
+    user.remnawave_uuid = str(remote.ref)
     user.subscription_url = remote.subscription_url
     user.expire_at = remote.expire_at or expire_at
 
     mirrored = await _mirror_subscription(
         db,
         user,
-        remnawave_id=remote.id,
-        username=remote.username,
+        remote=remote,
         subscription_url=user.subscription_url,
         expire_at=user.expire_at,
         plan_id=None,
@@ -449,7 +462,7 @@ async def create_subscription(
     try:
         if trial is not None:
             remote = await client.update_user(
-                trial.remnawave_id,
+                trial.remote_ref,
                 expireAt=expire_at.isoformat(),
                 status="ACTIVE",
                 activeInternalSquads=plan.squad_uuids,
@@ -457,7 +470,7 @@ async def create_subscription(
                 trafficLimitBytes=plan.traffic_limit_bytes,
                 description=f"Выдано ботом: {source} (апгрейд с триала)",
             )
-            await _reset_traffic_if_limited(client, trial.remnawave_id, plan)
+            await _reset_traffic_if_limited(client, trial.remote_ref, plan)
         else:
             remote = await _create_or_adopt(
                 client,
@@ -482,7 +495,8 @@ async def create_subscription(
     else:
         subscription = BotSubscription(
             user_id=user.id,
-            remnawave_id=remote.id,
+            remnawave_id=remote.id or 0,
+            remnawave_uuid=remote.uuid,
             username=remote.username,
             subscription_url=remote.subscription_url,
             expire_at=remote.expire_at or expire_at,
@@ -533,14 +547,14 @@ async def extend_subscription(
     client = client_for(config)
     try:
         remote = await client.update_user(
-            subscription.remnawave_id,
+            subscription.remote_ref,
             expireAt=expire_at.isoformat(),
             status="ACTIVE",
             activeInternalSquads=plan.squad_uuids,
             hwidDeviceLimit=plan.hwid_limit,
             trafficLimitBytes=plan.traffic_limit_bytes,
         )
-        await _reset_traffic_if_limited(client, subscription.remnawave_id, plan)
+        await _reset_traffic_if_limited(client, subscription.remote_ref, plan)
     finally:
         await client.aclose()
 
@@ -594,11 +608,11 @@ async def add_traffic(
 
     client = client_for(config)
     try:
-        remote = await client.get_user(subscription.remnawave_id)
+        remote = await client.get_user(subscription.remote_ref)
         if remote.traffic_limit_bytes <= 0:
             raise TrafficUnavailable("На этой подписке трафик безлимитный — докупать нечего")
         new_limit = remote.traffic_limit_bytes + package.traffic_bytes
-        await client.update_user(subscription.remnawave_id, trafficLimitBytes=new_limit)
+        await client.update_user(subscription.remote_ref, trafficLimitBytes=new_limit)
     finally:
         await client.aclose()
 

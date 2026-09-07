@@ -123,7 +123,10 @@ export interface Squad {
 }
 
 export interface PanelUser {
-  id: number
+  id: number | null
+  uuid: string | null
+  /** Идентификатор для запросов: uuid у старых панелей, id у новых. */
+  ref: string
   username: string
   status: 'ACTIVE' | 'DISABLED' | 'LIMITED' | 'EXPIRED'
   expire_at: string | null
@@ -357,16 +360,16 @@ export const panel = {
     return api<{ users: PanelUser[]; total: number }>(`/users?${query}`)
   },
   userStatusCounts: () => api<UserStatusCounts>('/users/status-counts'),
-  updateUser: (id: number, json: UserUpdate) =>
+  updateUser: (id: string, json: UserUpdate) =>
     api<PanelUser>(`/users/${id}`, { method: 'PATCH', json }),
-  extendUser: (id: number, days: number) =>
+  extendUser: (id: string, days: number) =>
     api<PanelUser>(`/users/${id}/extend`, { method: 'POST', json: { days } }),
-  setUserStatus: (id: number, status: 'ACTIVE' | 'DISABLED') =>
+  setUserStatus: (id: string, status: 'ACTIVE' | 'DISABLED') =>
     api<PanelUser>(`/users/${id}/status`, { method: 'POST', json: { status } }),
-  devices: (id: number) => api<Device[]>(`/users/${id}/devices`),
-  deleteDevice: (id: number, hwid: string) =>
+  devices: (id: string) => api<Device[]>(`/users/${id}/devices`),
+  deleteDevice: (id: string, hwid: string) =>
     api<void>(`/users/${id}/devices/${hwid}`, { method: 'DELETE' }),
-  resetDevices: (id: number) =>
+  resetDevices: (id: string) =>
     api<void>(`/users/${id}/devices`, { method: 'DELETE' }),
 
   botStatus: () => api<BotStatus>('/bot'),

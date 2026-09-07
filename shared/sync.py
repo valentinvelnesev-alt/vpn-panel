@@ -19,6 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared.db.models import BotSubscription, BotUser
 
 
+def stored_ref(value: str | None) -> int | str | None:
+    """Разбирает сохранённый идентификатор Remnawave.
+
+    В BotUser.remnawave_uuid лежит либо uuid старой панели, либо число —
+    id новой, записанное строкой. Клиент различает их по типу."""
+    if not value:
+        return None
+    return int(value) if value.isdigit() else value
+
+
 def _aware(value: datetime | None) -> datetime | None:
     if value is not None and value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -45,15 +55,25 @@ async def refresh_user_summary(db: AsyncSession, user: BotUser) -> None:
 async def sync_from_remote(
     db: AsyncSession,
     *,
-    remnawave_id: int,
+    remnawave_id: int | None,
     expire_at: datetime | None,
     subscription_url: str | None,
+    remnawave_uuid: str | None = None,
 ) -> bool:
     """Обновляет локальный ключ по данным Remnawave. Возвращает, был ли
-    такой ключ вообще известен боту (ручные пользователи панели — нет)."""
-    row = await db.scalar(
-        select(BotSubscription).where(BotSubscription.remnawave_id == remnawave_id)
-    )
+    такой ключ вообще известен боту (ручные пользователи панели — нет).
+
+    Ищем и по uuid, и по id: старые панели отдают оба поля, новые — только
+    id, а в базе у ключа может быть заполнено любое из них."""
+    row = None
+    if remnawave_uuid:
+        row = await db.scalar(
+            select(BotSubscription).where(BotSubscription.remnawave_uuid == remnawave_uuid)
+        )
+    if row is None and remnawave_id is not None:
+        row = await db.scalar(
+            select(BotSubscription).where(BotSubscription.remnawave_id == remnawave_id)
+        )
     if row is None:
         return False
     row.expire_at = expire_at
