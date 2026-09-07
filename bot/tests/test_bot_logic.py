@@ -106,14 +106,36 @@ def test_premium_mode_wraps_configured_ids() -> None:
     assert out == '<tg-emoji emoji-id="5237699328843200968">🛡</tg-emoji> Привет'
 
 
-def test_premium_mode_without_map_falls_back_to_plain() -> None:
-    """Карта пуста — рисуем обычные символы, а не битый тег."""
-    assert texts.render("{@shield} Привет", EmojiMode.PREMIUM, {}) == "🛡 Привет"
+def test_premium_mode_uses_builtin_ids_without_map() -> None:
+    """Карта из панели пуста — берём встроенные id набора, а не рисуем
+    обычные символы: премиум-оформление работает «из коробки»."""
+    from app.icons import ICONS
+
+    entry = ICONS["shield"]
+    out = texts.render("{@shield} Привет", EmojiMode.PREMIUM, {})
+    assert out == f'<tg-emoji emoji-id="{entry.emoji_id}">{entry.placeholder}</tg-emoji> Привет'
 
 
-def test_premium_mode_falls_back_per_icon() -> None:
+def test_premium_placeholder_matches_the_sticker_set() -> None:
+    """Заглушка внутри тега обязана совпадать с эмодзи набора, иначе
+    Telegram отвергает всё сообщение целиком (ENTITY_TEXT_INVALID)."""
+    from app.icons import ICONS
+
+    for name, entry in ICONS.items():
+        if entry.emoji_id:
+            assert entry.premium_char, f"у иконки {name} нет заглушки набора"
+            assert entry.placeholder == entry.premium_char
+
+
+def test_panel_override_wins_over_builtin() -> None:
+    """Свой id из панели важнее встроенного; заглушкой к нему идёт обычный
+    символ — эмодзи чужого набора нам неизвестно."""
+    from app.icons import ICONS
+
     out = texts.render("{@shield}{@clock}", EmojiMode.PREMIUM, {"shield": "1"})
-    assert out == '<tg-emoji emoji-id="1">🛡</tg-emoji>⏳'
+    clock = ICONS["clock"]
+    assert out.startswith('<tg-emoji emoji-id="1">' + ICONS["shield"].plain + "</tg-emoji>")
+    assert out.endswith(f'<tg-emoji emoji-id="{clock.emoji_id}">{clock.placeholder}</tg-emoji>')
 
 
 def test_render_substitutes_values() -> None:

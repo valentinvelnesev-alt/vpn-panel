@@ -1415,8 +1415,20 @@ async def _render_devices(callback: CallbackQuery, config: Config, subscription_
             devices = await client.get_devices(subscription.remote_ref)
         finally:
             await client.aclose()
-    except RemnawaveError:
-        await callback.answer("Не удалось получить список", show_alert=True)
+    except RemnawaveError as exc:
+        # 400/404 — ключа в Remnawave нет: он удалён или заведён на другой
+        # панели. Это не сбой связи, и «попробуйте позже» тут вводит в
+        # заблуждение, поэтому говорим прямо.
+        log.warning("Устройства ключа #%s: %s", subscription_id, exc)
+        if exc.status_code in (400, 404):
+            await callback.answer(
+                "Этот ключ не найден на сервере VPN. Напишите в поддержку — его нужно перевыпустить.",
+                show_alert=True,
+            )
+        else:
+            await callback.answer(
+                "Сервер VPN сейчас не отвечает, попробуйте позже", show_alert=True
+            )
         return
 
     if devices:
@@ -1457,8 +1469,9 @@ async def cb_subscription_devices_reset(callback: CallbackQuery, config: Config)
             await client.delete_all_devices(subscription.remote_ref)
         finally:
             await client.aclose()
-    except RemnawaveError:
-        await callback.answer("Не удалось сбросить", show_alert=True)
+    except RemnawaveError as exc:
+        log.warning("Сброс устройств ключа #%s: %s", subscription_id, exc)
+        await callback.answer("Не удалось сбросить устройства", show_alert=True)
         return
 
     await callback.answer("Устройства отвязаны", show_alert=True)
