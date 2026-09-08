@@ -190,6 +190,9 @@ export interface BotSettings {
 }
 
 export interface BotStatus extends BotSettings {
+  /** Картинка над экранами бота: имя файла и ссылка для предпросмотра. */
+  menu_photo: string | null
+  menu_photo_url: string | null
   configured: boolean
   enabled: boolean
   state: 'stopped' | 'running' | 'error'
@@ -384,6 +387,13 @@ export const panel = {
     api<BotStatus>('/bot/token', { method: 'PUT', json: { token } }),
   startBot: () => api<BotStatus>('/bot/start', { method: 'POST' }),
   stopBot: () => api<BotStatus>('/bot/stop', { method: 'POST' }),
+  setMenuPhoto: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api<BotStatus>('/bot/menu-photo', { method: 'PUT', body: form })
+  },
+  deleteMenuPhoto: () => api<BotStatus>('/bot/menu-photo', { method: 'DELETE' }),
+
   saveBotSettings: (json: BotSettings) =>
     api<BotStatus>('/bot/settings', { method: 'PUT', json }),
   setEmojiMode: (json: {

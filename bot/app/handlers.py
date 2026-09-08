@@ -45,7 +45,8 @@ from app.services import (
 from app.services import subscriptions as subs
 from app.services import wallet
 from app.states import UserStates
-from app.ui import safe_edit
+from app.ui import safe_edit as _safe_edit
+from app.ui import send_screen as _send_screen
 from shared.db.models import (
     BotSubscription,
     BotUser,
@@ -116,6 +117,28 @@ async def on_error(event: ErrorEvent) -> bool:
         except TelegramBadRequest:
             pass
     return True
+
+
+async def screen(
+    message: Message,
+    config: Config,
+    text: str,
+    reply_markup=None,
+    **kwargs: object,
+) -> None:
+    """Экран бота. Если в панели загружена картинка меню, показывается она
+    с подписью, иначе обычный текст (см. app/ui.py)."""
+    await _safe_edit(message, text, reply_markup, photo=config.menu_photo_path, **kwargs)
+
+
+async def send_new_screen(
+    message: Message,
+    config: Config,
+    text: str,
+    reply_markup=None,
+    **kwargs: object,
+) -> None:
+    await _send_screen(message, text, reply_markup, photo=config.menu_photo_path, **kwargs)
 
 
 def t(config: Config, template: str, **values: object) -> str:
@@ -258,10 +281,10 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
     )
 
     if isinstance(target, CallbackQuery):
-        await safe_edit(message, text, markup)
+        await screen(message, config, text, markup)
         await target.answer()
     else:
-        await message.answer(text, reply_markup=markup)
+        await send_new_screen(message, config, text, markup)
 
 
 @router.message(CommandStart())
@@ -373,10 +396,10 @@ async def _show_subscription(target: Message | CallbackQuery, config: Config) ->
 
     markup = keyboards.back_to_menu(config)
     if isinstance(target, CallbackQuery):
-        await safe_edit(message, text, markup)
+        await screen(message, config, text, markup)
         await target.answer()
     else:
-        await message.answer(text, reply_markup=markup)
+        await send_new_screen(message, config, text, markup)
 
 
 # ── Триал ─────────────────────────────────────────────────────────────
@@ -404,8 +427,9 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             return
         expire_at, url = user.expire_at, user.subscription_url
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(
             config,
             texts.TRIAL_GRANTED,
@@ -422,7 +446,7 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 @router.callback_query(F.data == "plans")
 async def cb_plans(callback: CallbackQuery, config: Config) -> None:
     if not config.plans:
-        await safe_edit(callback.message, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
+        await screen(callback.message, config, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
         await callback.answer()
         return
 
@@ -433,14 +457,16 @@ async def cb_plans(callback: CallbackQuery, config: Config) -> None:
     if categories:
         # Больше одной категории тарифов — сперва даём выбрать категорию,
         # чтобы длинный список не сваливался в одну простыню кнопок.
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             t(config, "{@card} <b>Выберите тариф</b>"),
             keyboards.categories_menu(config, discount_percent=discount),
         )
     else:
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             _plans_header(config, discount),
             keyboards.plans_menu(config, discount_percent=discount),
         )
@@ -471,8 +497,9 @@ async def cb_plan_category(callback: CallbackQuery, config: Config) -> None:
     title = next(
         (p.category_title for p in config.plans if p.category_id == category_id), None
     )
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         _plans_header(config, discount, title),
         keyboards.plans_menu(
             config, prefix=prefix, category_id=category_id, discount_percent=discount, back=back
@@ -497,8 +524,9 @@ async def cb_buy(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         discount = await _user_discount(db, callback.from_user.id)
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         _pay_header(config, plan, discount),
         keyboards.providers_menu(config, purpose="plan", target=str(plan.id)),
     )
@@ -527,8 +555,9 @@ async def cb_wallet(callback: CallbackQuery, config: Config) -> None:
         w = await wallet.get_or_create(db, user)
         balance = w.balance_kopeks
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(
             config,
             "{@wallet} <b>Баланс</b>\n\nДоступно: <b>{amount}</b>\n\n"
@@ -550,8 +579,9 @@ async def cb_topup_preset(callback: CallbackQuery, config: Config) -> None:
 @router.callback_query(F.data == "topup_custom")
 async def cb_topup_custom(callback: CallbackQuery, config: Config, state: FSMContext) -> None:
     await state.set_state(UserStates.entering_topup_amount)
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         "Введите сумму пополнения в рублях (от 10 до 100000):",
         keyboards.back_to_menu(config),
     )
@@ -571,15 +601,18 @@ async def on_topup_amount(message: Message, state: FSMContext, config: Config) -
 
     await state.clear()
     target = f"{amount:.2f}".rstrip("0").rstrip(".")
-    await message.answer(
+    await send_new_screen(
+        message,
+        config,
         f"Пополнение на {target} ₽. Способ оплаты:",
-        reply_markup=keyboards.providers_menu(config, purpose="topup", target=target),
+        keyboards.providers_menu(config, purpose="topup", target=target),
     )
 
 
 async def _show_topup_providers(callback: CallbackQuery, config: Config, amount: str) -> None:
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         f"Пополнение на {amount} ₽. Способ оплаты:",
         keyboards.providers_menu(config, purpose="topup", target=amount),
     )
@@ -719,8 +752,9 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             return
         payment_id = payment.id
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(
             config,
             "{@card} <b>{description}</b>\nК оплате: <b>{amount}</b>\n\n"
@@ -809,7 +843,7 @@ async def _pay_from_wallet(
             user.discount_percent = 0
         user_id = user.id
 
-    await safe_edit(callback.message, done, keyboards.back_to_menu(config))
+    await screen(callback.message, config, done, keyboards.back_to_menu(config))
     await callback.answer()
     await payment_processor.after_purchase_effects(config, user_id, amount_kopeks, label)
 
@@ -873,8 +907,9 @@ async def cb_check_payment(callback: CallbackQuery, config: Config) -> None:
 
     if paid:
         await callback.answer("Оплата подтверждена!", show_alert=True)
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             t(config, "{@check} Оплата подтверждена, доступ выдан. Детали — в «Мои подписки»."),
             keyboards.back_to_menu(config),
         )
@@ -951,8 +986,9 @@ async def _legacy_stars_payment(db, config: Config, message: Message, payload: s
 @router.callback_query(F.data == "promo")
 async def cb_promo(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
     await state.set_state(UserStates.entering_promo_code)
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(config, "{@gift} <b>Промокод</b>\n\nВведите код одним сообщением:"),
         keyboards.cancel_to_menu(config),
     )
@@ -996,7 +1032,7 @@ async def on_promo_code(message: Message, state: FSMContext, config: Config) -> 
         text += f"\nНачислено дней: {bonus_days}"
     if discount > 0:
         text += f"\nСкидка {discount}% будет применена к следующей оплате тарифа."
-    await message.answer(text, reply_markup=keyboards.back_to_menu(config))
+    await send_new_screen(message, config, text, keyboards.back_to_menu(config))
 
 
 # ── Реферальная программа ─────────────────────────────────────────────
@@ -1036,7 +1072,7 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
         )
     lines += ["", "Ваша ссылка:", "<code>{link}</code>", "", "Приглашено: {invited}"]
     text = t(config, "\n".join(lines), link=link, invited=invited or 0)
-    await safe_edit(callback.message, text, keyboards.referral_menu(config, link))
+    await screen(callback.message, config, text, keyboards.referral_menu(config, link))
     await callback.answer()
 
 
@@ -1053,7 +1089,7 @@ async def cb_my_subscriptions(callback: CallbackQuery, config: Config) -> None:
         if rows
         else t(config, texts.SUBSCRIPTION_NONE)
     )
-    await safe_edit(callback.message, text, keyboards.subscriptions_menu(config, rows, titles))
+    await screen(callback.message, config, text, keyboards.subscriptions_menu(config, rows, titles))
     await callback.answer()
 
 
@@ -1137,8 +1173,9 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
     can_buy_traffic = bool(
         config.traffic_packages and usage is not None and usage[1] > 0
     )
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         "\n".join(lines),
         keyboards.subscription_detail_menu(
             config,
@@ -1163,8 +1200,9 @@ async def cb_traffic_packages(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Пакеты трафика пока не настроены", show_alert=True)
         return
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(
             config,
             "{@traffic} <b>Докупить трафик</b>\n\n"
@@ -1187,8 +1225,9 @@ async def cb_traffic_pick(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
         return
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(
             config,
             "{@traffic} <b>+{gb} ГБ трафика</b>\n\nК оплате: <b>{price}</b>\n\nСпособ оплаты:",
@@ -1231,8 +1270,9 @@ async def cb_connect(callback: CallbackQuery, config: Config) -> None:
         await callback.answer("Активная подписка не найдена", show_alert=True)
         return
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(config, "{@link} <b>Подключение</b>")
         + f"\n\n<b>Ссылка подписки:</b>\n<code>{url}</code>\n\nВыберите устройство:",
         connection.devices_keyboard(subscription_id, url, config.premium_emoji),
@@ -1264,8 +1304,9 @@ async def cb_connect_apps(callback: CallbackQuery, config: Config) -> None:
     if device not in connection.APPS:
         await callback.answer()
         return
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         f"<b>Приложения для {connection.APPS[device]['title']}</b>\n\nВыберите приложение:",
         connection.apps_keyboard(int(raw_id), device, config.premium_emoji),
     )
@@ -1283,8 +1324,9 @@ async def _render_instruction(
         await callback.answer("Активная подписка не найдена", show_alert=True)
         return
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         connection.instruction_text(device, app, url),
         connection.instruction_keyboard(
             subscription_id,
@@ -1338,7 +1380,7 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
         return
 
     if not config.plans:
-        await safe_edit(callback.message, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
+        await screen(callback.message, config, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
         await callback.answer()
         return
 
@@ -1352,8 +1394,9 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
         # Продление — в рамках категории ключа: иначе продление тарифа «DE»
         # тарифом «VPN» молча переключило бы сквады, и клиент потерял бы
         # доступ к тому, за что платил.
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             _plans_header(config, discount),
             keyboards.plans_menu(
                 config,
@@ -1364,14 +1407,16 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
             ),
         )
     elif categories:
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             t(config, "{@card} <b>Выберите тариф</b>"),
             keyboards.categories_menu(config, prefix=prefix, back=back, discount_percent=discount),
         )
     else:
-        await safe_edit(
+        await screen(
             callback.message,
+            config,
             _plans_header(config, discount),
             keyboards.plans_menu(config, prefix=prefix, discount_percent=discount, back=back),
         )
@@ -1394,8 +1439,9 @@ async def cb_renew_pick_plan(callback: CallbackQuery, config: Config) -> None:
         discount = await _user_discount(db, callback.from_user.id)
 
     target = f"{subscription_id}-{plan.id}"
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         _pay_header(config, plan, discount),
         keyboards.providers_menu(config, purpose="renew", target=target),
     )
@@ -1441,8 +1487,9 @@ async def _render_devices(callback: CallbackQuery, config: Config, subscription_
     else:
         text = t(config, texts.DEVICES_EMPTY)
 
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         text,
         keyboards.devices_menu(config, bool(devices), subscription_id=subscription_id),
     )
@@ -1497,14 +1544,15 @@ async def cb_profile(callback: CallbackQuery, config: Config) -> None:
     if discount:
         lines.append(t(config, "{@gift} Скидка на следующую оплату: <b>{p}%</b>", p=discount))
     text = "\n".join(lines)
-    await safe_edit(callback.message, text, keyboards.profile_menu(config))
+    await screen(callback.message, config, text, keyboards.profile_menu(config))
     await callback.answer()
 
 
 @router.callback_query(F.data == "wallet_topup")
 async def cb_wallet_topup(callback: CallbackQuery, config: Config) -> None:
-    await safe_edit(
+    await screen(
         callback.message,
+        config,
         t(config, "{@card} Выберите сумму пополнения:"),
         keyboards.wallet_menu(config),
     )
@@ -1556,7 +1604,7 @@ async def cb_purchase_history(callback: CallbackQuery, config: Config) -> None:
             lines.append(f"• {p.created_at.strftime('%d.%m.%Y')} · {what} ({how}){amount}")
         text = "🧾 <b>История покупок</b>\n\n" + "\n".join(lines)
 
-    await safe_edit(callback.message, text, keyboards.back_to_menu(config))
+    await screen(callback.message, config, text, keyboards.back_to_menu(config))
     await callback.answer()
 
 

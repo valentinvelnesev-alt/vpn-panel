@@ -158,6 +158,74 @@ function TokenCard({ status }: { status: BotStatus }) {
   )
 }
 
+function MenuPhotoCard({ status }: { status: BotStatus }) {
+  const queryClient = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const refresh = (data: BotStatus) => queryClient.setQueryData(['bot'], data)
+
+  const upload = useMutation({
+    mutationFn: (file: File) => panel.setMenuPhoto(file),
+    onSuccess: refresh,
+    onError: (e: Error) => setError(e.message),
+  })
+  const remove = useMutation({ mutationFn: panel.deleteMenuPhoto, onSuccess: refresh })
+
+  return (
+    <Card>
+      <h2 className="font-medium">Картинка меню</h2>
+      <p className="mt-1 text-sm text-muted">
+        Показывается над каждым экраном бота. Длинные экраны, например инструкции по
+        подключению, Telegram не разрешает подписывать к фото — там останется обычный
+        текст. JPEG, PNG или WebP до 5 МБ.
+      </p>
+
+      {status.menu_photo_url && (
+        <img
+          src={status.menu_photo_url}
+          alt="Картинка меню"
+          className="mt-4 max-h-48 rounded-2xl border object-contain"
+        />
+      )}
+
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <label className="cursor-pointer">
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (!file) return
+              setError(null)
+              upload.mutate(file)
+            }}
+          />
+          <span className="inline-flex h-10 items-center rounded-lg bg-accent px-4 text-sm font-medium text-white">
+            {upload.isPending
+              ? 'Загружаю…'
+              : status.menu_photo
+                ? 'Заменить'
+                : 'Загрузить'}
+          </span>
+        </label>
+        {status.menu_photo && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+          >
+            Убрать
+          </Button>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 function SettingsCard({ status }: { status: BotStatus }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<BotSettings>(status)
@@ -392,6 +460,7 @@ export default function Bot() {
       <TokenCard status={status} />
       {status.configured && (
         <>
+          <MenuPhotoCard status={status} />
           <BotPlans />
           <BotTraffic />
           <BotPromo />

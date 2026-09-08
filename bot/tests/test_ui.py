@@ -383,3 +383,107 @@ def test_balance_uses_wallet_icon_not_a_card() -> None:
         if b.text.startswith("Баланс:")
     )
     assert balance.icon_custom_emoji_id == ICONS["wallet"].emoji_id
+
+
+# ── Картинка над экранами ─────────────────────────────────────────────
+class _FakeMessage:
+    """Сообщение Telegram ровно в том объёме, который трогает app/ui.py."""
+
+    def __init__(self, *, photo=None, text="старый текст"):
+        self.photo = photo
+        self.text = text
+        self.caption = "старая подпись" if photo else None
+        self.calls: list[tuple[str, str]] = []
+
+    async def edit_text(self, text, reply_markup=None, **kw):
+        self.calls.append(("edit_text", text))
+
+    async def edit_caption(self, caption=None, reply_markup=None, **kw):
+        self.calls.append(("edit_caption", caption))
+
+    async def answer(self, text, reply_markup=None, **kw):
+        self.calls.append(("answer", text))
+        return _FakeMessage(text=text)
+
+    async def answer_photo(self, photo, caption=None, reply_markup=None, **kw):
+        self.calls.append(("answer_photo", caption))
+        sent = _FakeMessage(photo=[_FakePhoto()])
+        return sent
+
+    async def delete(self):
+        self.calls.append(("delete", ""))
+
+
+class _FakePhoto:
+    file_id = "cached-file-id"
+
+
+async def test_screen_without_photo_edits_text() -> None:
+    from app import ui
+
+    msg = _FakeMessage()
+    await ui.safe_edit(msg, "привет", None, photo=None)
+    assert msg.calls == [("edit_text", "привет")]
+
+
+async def test_screen_with_photo_edits_caption() -> None:
+    from app import ui
+
+    msg = _FakeMessage(photo=[_FakePhoto()])
+    await ui.safe_edit(msg, "привет", None, photo="/app/uploads/menu.jpg")
+    assert msg.calls == [("edit_caption", "привет")]
+
+
+async def test_text_message_is_replaced_when_photo_appears() -> None:
+    """Тип сообщения Telegram менять не даёт — старое удаляется."""
+    from app import ui
+
+    ui.reset_photo_cache()
+    msg = _FakeMessage()
+    await ui.safe_edit(msg, "привет", None, photo="/app/uploads/menu.jpg")
+    assert [c[0] for c in msg.calls] == ["delete", "answer_photo"]
+
+
+async def test_long_screen_falls_back_to_text() -> None:
+    """Подпись к фото — 1024 символа. Длинный экран должен уйти текстом,
+    иначе Telegram отвергнет отправку целиком."""
+    from app import ui
+
+    long_text = "я" * (ui.MAX_CAPTION + 1)
+    assert not ui.fits_caption(long_text)
+
+    msg = _FakeMessage(photo=[_FakePhoto()])
+    await ui.safe_edit(msg, long_text, None, photo="/app/uploads/menu.jpg")
+    assert [c[0] for c in msg.calls] == ["delete", "answer"]
+
+
+async def test_connection_instructions_fit_or_fall_back_cleanly() -> None:
+    """Инструкции по подключению длиннее подписи — проверяем, что это
+    осознанно, а не случайно проходит по границе."""
+    from app import ui
+
+    url = "https://sub.example.com/abcdef123456"
+    for device in connection.APPS:
+        for app in ("incy", "happ"):
+            text = connection.instruction_text(device, app, url)
+            assert len(text) <= 4096  # обычное сообщение вмещает
+            if not ui.fits_caption(text):
+                msg = _FakeMessage(photo=[_FakePhoto()])
+                await ui.safe_edit(msg, text, None, photo="/app/uploads/menu.jpg")
+                assert [c[0] for c in msg.calls] == ["delete", "answer"]
+
+
+async def test_photo_file_id_is_reused() -> None:
+    """Второй раз шлём file_id, а не сам файл — иначе каждый экран грузил
+    бы картинку заново."""
+    from app import ui
+
+    ui.reset_photo_cache()
+    path = "/app/uploads/menu.jpg"
+    first = _FakeMessage()
+    await ui.send_screen(first, "экран", None, photo=path)
+    assert ui._file_ids[path] == "cached-file-id"
+    assert ui._photo_input(path) == "cached-file-id"
+
+    ui.reset_photo_cache(path)
+    assert path not in ui._file_ids

@@ -56,6 +56,11 @@ services:
     build:
       context: .
       dockerfile: bot/Dockerfile
+    volumes:
+      # Картинку меню бот отправляет файлом с диска, а не ссылкой: в режиме
+      # по IP порт панели обычно закрыт файрволом, и Telegram не смог бы её
+      # скачать.
+      - uploads:/app/uploads:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
