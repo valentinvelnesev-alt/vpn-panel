@@ -868,3 +868,52 @@ async def test_telegram_lookup_filters_results(config, monkeypatch) -> None:
     assert [u.username for u in found] == ["b"]
     assert any("by-telegram-id" in p for p in seen)  # сперва пробуем старый путь
     assert any("stream" in p for p in seen)  # затем новый
+
+
+# ── Доступ к Remnawave за защитой nginx ───────────────────────────────
+async def test_secret_access_param_is_repeated_on_every_request(monkeypatch) -> None:
+    """Панель Remnawave часто прячут проверкой в nginx: без секрета в куке
+    или query-параметре соединение рвётся без ответа. Секрет живёт в самом
+    адресе, и клиент обязан повторять его в каждом запросе."""
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.url.query.decode()))
+        return httpx.Response(200, json={"response": {"version": "2.8.1"}})
+
+    from shared.remnawave.client import RemnawaveClient
+
+    client = RemnawaveClient("https://panel.example.com/?zpnAveWm=CFMzzanB", "token")
+    client._client = httpx.AsyncClient(
+        base_url="https://panel.example.com", transport=httpx.MockTransport(handler)
+    )
+    client._client.cookies.set("zpnAveWm", "CFMzzanB")
+    try:
+        await client.check_connection()
+        await client.get_users(start=0, size=10)
+    finally:
+        await client.aclose()
+
+    assert seen[0] == ("/api/system/metadata", "zpnAveWm=CFMzzanB")
+    # Параметры запроса не затираются секретом и наоборот.
+    path, query = seen[1]
+    assert path == "/api/users"
+    assert "zpnAveWm=CFMzzanB" in query and "size=10" in query
+
+
+def test_secret_is_stripped_from_base_url() -> None:
+    """В base_url секрет остаться не должен, иначе httpx склеит его с путём."""
+    from shared.remnawave.client import RemnawaveClient
+
+    client = RemnawaveClient("https://panel.example.com/?zpnAveWm=CFMzzanB", "token")
+    assert str(client._client.base_url) == "https://panel.example.com"
+    assert client._access_params == {"zpnAveWm": "CFMzzanB"}
+    assert client._client.cookies.get("zpnAveWm") == "CFMzzanB"
+
+
+def test_plain_url_has_no_access_params() -> None:
+    from shared.remnawave.client import RemnawaveClient
+
+    client = RemnawaveClient("https://panel.example.com/", "token")
+    assert client._access_params == {}
+    assert str(client._client.base_url) == "https://panel.example.com"

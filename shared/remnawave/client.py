@@ -22,6 +22,7 @@
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -67,12 +68,24 @@ class RemnawaveClient:
         timeout: float = 15.0,
         verify_tls: bool = True,
     ) -> None:
+        # Адрес может содержать секретный параметр доступа: панель Remnawave
+        # часто прячут за проверкой в nginx, которая пускает по куке или по
+        # query-параметру, а остальным рвёт соединение без ответа. Браузер
+        # получает куку по ссылке с параметром, а нам нужно повторять его в
+        # каждом запросе — иначе API молча недоступен.
+        parts = urlsplit(base_url)
+        self._access_params = dict(parse_qsl(parts.query))
+        clean = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+
         self._client = httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
+            base_url=clean,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
+            # Тот же секрет ставим и кукой: часть конфигураций проверяет
+            # только её, а лишняя кука никому не мешает.
+            cookies=self._access_params or None,
             timeout=timeout,
             verify=verify_tls,
             follow_redirects=True,
@@ -89,6 +102,8 @@ class RemnawaveClient:
 
     # ── Транспорт ─────────────────────────────────────────────────────
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        if self._access_params:
+            kwargs["params"] = {**self._access_params, **(kwargs.get("params") or {})}
         try:
             response = await self._client.request(method, path, **kwargs)
         except httpx.TimeoutException as exc:
