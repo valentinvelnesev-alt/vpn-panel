@@ -220,6 +220,11 @@ class BotConfig(Base, TimestampMixin):
     privacy_policy_url: Mapped[str | None] = mapped_column(String(512), default=None)
     terms_url: Mapped[str | None] = mapped_column(String(512), default=None)
 
+    # Картинка над каждым экраном бота: имя файла в общем томе uploads.
+    # Хранится имя, а не ссылка: бот берёт файл с диска и не зависит от
+    # того, доступен ли адрес панели снаружи.
+    menu_photo: Mapped[str | None] = mapped_column(String(255), default=None)
+
     # Алерты о падении нод (Pro) — шлются этому чату из бота.
     node_alerts_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

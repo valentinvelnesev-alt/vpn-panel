@@ -1,10 +1,13 @@
+import os
+import uuid as uuid_lib
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.api.deps import CurrentAdmin, DbSession
+from app.core.config import settings
 from app.services import telegram
 from app.services.telegram import TelegramError
 from shared import bus
@@ -77,6 +80,10 @@ class BotStatusOut(BaseModel):
     privacy_policy_url: str | None
     terms_url: str | None
 
+    # Картинка над экранами бота: имя файла и ссылка для предпросмотра.
+    menu_photo: str | None
+    menu_photo_url: str | None
+
 
 def _status(row: BotConfig) -> BotStatusOut:
     token = decrypt(row.token_encrypted) if row.token_encrypted else None
@@ -107,6 +114,10 @@ def _status(row: BotConfig) -> BotStatusOut:
         admin_telegram_ids=list(row.admin_telegram_ids or []),
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
+        menu_photo=row.menu_photo,
+        menu_photo_url=(
+            f"{settings.public_url}/uploads/{row.menu_photo}" if row.menu_photo else None
+        ),
     )
 
 
@@ -245,6 +256,70 @@ async def save_settings(
     _audit(db, admin, "bot.settings", request)
     await db.flush()
     await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+    return _status(row)
+
+
+# ── Картинка над экранами бота ────────────────────────────────────────
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PHOTO_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+def _drop_photo_file(name: str | None) -> None:
+    """Старый файл больше не нужен: имена уникальные, ссылок на него нет."""
+    if not name:
+        return
+    try:
+        os.remove(os.path.join(settings.upload_dir, name))
+    except OSError:
+        pass
+
+
+@router.put("/menu-photo", response_model=BotStatusOut)
+async def set_menu_photo(
+    admin: CurrentAdmin, db: DbSession, request: Request, file: UploadFile
+) -> BotStatusOut:
+    """Загружает картинку, которая показывается над каждым экраном бота.
+
+    Файл кладётся в общий том `uploads`: бот берёт его с диска и не зависит
+    от того, доступен ли адрес панели снаружи.
+    """
+    ext = PHOTO_TYPES.get(file.content_type or "")
+    if ext is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Поддерживаются только JPEG, PNG и WebP",
+        )
+
+    body = await file.read(MAX_PHOTO_BYTES + 1)
+    if len(body) > MAX_PHOTO_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Файл больше 5 МБ")
+
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    name = f"menu-{uuid_lib.uuid4().hex}{ext}"
+    with open(os.path.join(settings.upload_dir, name), "wb") as f:
+        f.write(body)
+
+    row = await _config(db)
+    previous, row.menu_photo = row.menu_photo, name
+    _audit(db, admin, "bot.menu_photo.set", request)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    _drop_photo_file(previous)
+    await bus.publish(bus.CMD_RELOAD)
+    return _status(row)
+
+
+@router.delete("/menu-photo", response_model=BotStatusOut)
+async def delete_menu_photo(
+    admin: CurrentAdmin, db: DbSession, request: Request
+) -> BotStatusOut:
+    row = await _config(db)
+    previous, row.menu_photo = row.menu_photo, None
+    _audit(db, admin, "bot.menu_photo.delete", request)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    _drop_photo_file(previous)
     await bus.publish(bus.CMD_RELOAD)
     return _status(row)
 

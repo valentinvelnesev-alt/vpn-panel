@@ -4,6 +4,7 @@
 конфиг это снимок строки bot_config плюс список тарифов.
 """
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -11,6 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.crypto import decrypt
+
+# Общий том с панелью, подключён боту только на чтение.
+MENU_PHOTO_DIR = os.environ.get("UPLOAD_DIR", "/app/uploads")
 from shared.db.models import BotConfig, EmojiMode
 from shared.db.models import Plan as PlanRow
 from shared.db.models import TrafficPackage as TrafficPackageRow
@@ -147,6 +151,8 @@ class Config:
     privacy_policy_url: str | None = None
     terms_url: str | None = None
 
+    menu_photo: str | None = None
+
     plans: list[PlanView] = field(default_factory=list)
     traffic_packages: list[TrafficPackageView] = field(default_factory=list)
 
@@ -168,6 +174,17 @@ class Config:
     stars_enabled: bool = False
 
     loaded_at: datetime | None = None
+
+    @property
+    def menu_photo_path(self) -> str | None:
+        """Полный путь к картинке меню. None, если файла нет на диске —
+        тогда экраны просто рисуются текстом, без ошибок у клиента."""
+        import os
+
+        if not self.menu_photo:
+            return None
+        path = os.path.join(MENU_PHOTO_DIR, self.menu_photo)
+        return path if os.path.isfile(path) else None
 
     @property
     def can_run(self) -> bool:
@@ -277,6 +294,7 @@ async def load(db: AsyncSession) -> Config:
         admin_telegram_ids=list(row.admin_telegram_ids or []),
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
+        menu_photo=row.menu_photo,
         plans=[plan_view(p) for p in plans],
         traffic_packages=[traffic_view(p) for p in packages],
         remnawave_url=raw.get("remnawave_url"),
