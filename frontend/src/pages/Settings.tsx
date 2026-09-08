@@ -98,7 +98,10 @@ export default function Settings() {
         </p>
 
         <form onSubmit={submit} className="mt-5 space-y-4">
-          <Field label="Адрес панели Remnawave" hint="Например: https://panel.example.com">
+          <Field
+            label="Адрес панели Remnawave"
+            hint="Например: https://panel.example.com. Если админка закрыта проверкой в nginx, вставьте ссылку вместе с секретным параметром — тем же, по которой открываете её сами."
+          >
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
