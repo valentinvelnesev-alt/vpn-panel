@@ -214,7 +214,7 @@ def test_reply_keyboard_has_menu_and_help() -> None:
 
 
 # ── Редиректор подписки ───────────────────────────────────────────────
-SUB_URL = "https://sub.luxinet.ru/x72yERRmWcMWy_zA"
+SUB_URL = "https://sub.example.com/abcdef123456"
 
 
 def test_connect_url_without_redirect_is_the_subscription_link() -> None:
@@ -232,7 +232,7 @@ def test_connect_url_wraps_deep_link_into_https_page() -> None:
         parts = urlsplit(url)
         # Страница живёт на домене подписок, а не на домене панели.
         assert parts.scheme == "https"
-        assert parts.netloc == "sub.luxinet.ru"
+        assert parts.netloc == "sub.example.com"
         assert parts.path == "/miniapp/redirect.html"
         target = parse_qs(parts.query)["url"][0]
         assert target == prefix + SUB_URL
@@ -290,7 +290,7 @@ def test_instruction_keyboard_uses_redirect_when_enabled() -> None:
         )
 
     assert connect_button(False) == SUB_URL
-    assert connect_button(True).startswith("https://sub.luxinet.ru/miniapp/redirect.html?url=")
+    assert connect_button(True).startswith("https://sub.example.com/miniapp/redirect.html?url=")
 
 
 def test_traffic_button_hidden_without_packages() -> None:
