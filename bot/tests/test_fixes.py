@@ -883,32 +883,32 @@ async def test_secret_access_param_is_repeated_on_every_request(monkeypatch) -> 
 
     from shared.remnawave.client import RemnawaveClient
 
-    client = RemnawaveClient("https://panel.example.com/?zpnAveWm=CFMzzanB", "token")
+    client = RemnawaveClient("https://panel.example.com/?access=s3cr3tValue", "token")
     client._client = httpx.AsyncClient(
         base_url="https://panel.example.com", transport=httpx.MockTransport(handler)
     )
-    client._client.cookies.set("zpnAveWm", "CFMzzanB")
+    client._client.cookies.set("access", "s3cr3tValue")
     try:
         await client.check_connection()
         await client.get_users(start=0, size=10)
     finally:
         await client.aclose()
 
-    assert seen[0] == ("/api/system/metadata", "zpnAveWm=CFMzzanB")
+    assert seen[0] == ("/api/system/metadata", "access=s3cr3tValue")
     # Параметры запроса не затираются секретом и наоборот.
     path, query = seen[1]
     assert path == "/api/users"
-    assert "zpnAveWm=CFMzzanB" in query and "size=10" in query
+    assert "access=s3cr3tValue" in query and "size=10" in query
 
 
 def test_secret_is_stripped_from_base_url() -> None:
     """В base_url секрет остаться не должен, иначе httpx склеит его с путём."""
     from shared.remnawave.client import RemnawaveClient
 
-    client = RemnawaveClient("https://panel.example.com/?zpnAveWm=CFMzzanB", "token")
+    client = RemnawaveClient("https://panel.example.com/?access=s3cr3tValue", "token")
     assert str(client._client.base_url) == "https://panel.example.com"
-    assert client._access_params == {"zpnAveWm": "CFMzzanB"}
-    assert client._client.cookies.get("zpnAveWm") == "CFMzzanB"
+    assert client._access_params == {"access": "s3cr3tValue"}
+    assert client._client.cookies.get("access") == "s3cr3tValue"
 
 
 def test_plain_url_has_no_access_params() -> None:

@@ -11,11 +11,11 @@ Telegram не открывает ссылки `happ://` и `incy://` напря�
 Формирует цель и кодирует её в параметр `url`:
 
 ```
-happ://add/https://sub.luxinet.ru/<ключ>
-incy://import/https://sub.luxinet.ru/<ключ>
+happ://add/https://sub.example.com/<ключ>
+incy://import/https://sub.example.com/<ключ>
 ```
 ```
-https://sub.luxinet.ru/miniapp/redirect.html?url=<urlencoded-target>
+https://sub.example.com/miniapp/redirect.html?url=<urlencoded-target>
 ```
 
 Домен подставляется из самой ссылки подписки, отдельной настройки не требует.
@@ -58,7 +58,7 @@ docker compose up -d caddy
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
-  'https://sub.luxinet.ru/miniapp/redirect.html?url=test'
+  'https://sub.example.com/miniapp/redirect.html?url=test'
 ```
 
 Ожидается `200`, а в теле — «Некорректная ссылка для подключения»: параметр
