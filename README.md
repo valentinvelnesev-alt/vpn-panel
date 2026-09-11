@@ -121,7 +121,7 @@ Remnawave достаточно заменить файл и перегенери
 Если панель уже установлена, обновитесь одной командой:
 
 ```bash
-cd ~/vpn-panel && curl -fsSL https://raw.githubusercontent.com/valentinvelnesev-alt/vpn-panel/main/update.sh -o update.sh && bash update.sh
+cd vpn-panel && curl -fsSL https://raw.githubusercontent.com/valentinvelnesev-alt/vpn-panel/main/update.sh -o update.sh && bash update.sh
 ```
 
 > [!IMPORTANT]
