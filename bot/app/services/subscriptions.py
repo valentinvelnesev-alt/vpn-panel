@@ -417,6 +417,74 @@ async def grant_plan(
     )
 
 
+async def link_from_remnawave(
+    db: AsyncSession, config: Config, user: BotUser, *, force: bool = False
+) -> list[BotSubscription]:
+    """Подхватывает уже существующие в Remnawave аккаунты пользователя.
+
+    Аккаунт мог быть заведён вне бота — вручную в панели или при миграции —
+    и иметь telegram_id. Без этой привязки бот «не узнаёт» человека и на
+    первой же выдаче создаёт второй аккаунт Remnawave на тот же telegram_id.
+    Здесь ищем по telegram_id и заводим на найденное строки bot_subscriptions.
+
+    Идемпотентна: повторно не импортирует уже привязанные ключи, а флаг
+    remnawave_synced не даёт ходить в Remnawave на каждый /start.
+    """
+    if not force:
+        if user.remnawave_synced:
+            return []
+        if await subscription_count(db, user):
+            user.remnawave_synced = True
+            return []
+
+    try:
+        client = client_for(config)
+    except RemnawaveError:
+        return []  # Remnawave не подключена — синхронизировать нечего
+    try:
+        remotes = await client.get_users_by_telegram_id(user.telegram_id)
+    except RemnawaveError as exc:
+        # Сеть/панель недоступны — не ставим флаг, попробуем в другой раз.
+        log.warning("Синхронизация Remnawave для tg=%s не удалась: %s", user.telegram_id, exc)
+        return []
+    finally:
+        await client.aclose()
+
+    imported: list[BotSubscription] = []
+    for remote in remotes:
+        exists = None
+        if remote.uuid:
+            exists = await db.scalar(
+                select(BotSubscription).where(BotSubscription.remnawave_uuid == remote.uuid)
+            )
+        if exists is None and remote.id is not None:
+            exists = await db.scalar(
+                select(BotSubscription).where(BotSubscription.remnawave_id == remote.id)
+            )
+        if exists is not None:
+            continue  # ключ уже привязан к какому-то пользователю бота
+        row = BotSubscription(
+            user_id=user.id,
+            remnawave_id=remote.id or 0,
+            remnawave_uuid=remote.uuid,
+            username=remote.username,
+            subscription_url=remote.subscription_url,
+            expire_at=remote.expire_at,
+            plan_id=None,
+        )
+        db.add(row)
+        imported.append(row)
+
+    await db.flush()
+    user.remnawave_synced = True
+    if imported:
+        await refresh_user_summary(db, user)
+        log.info(
+            "Импортировано из Remnawave для tg=%s: %s ключей", user.telegram_id, len(imported)
+        )
+    return imported
+
+
 async def list_subscriptions(db: AsyncSession, user: BotUser) -> list[BotSubscription]:
     """Все ключи пользователя, новые сверху — экран «Мои подписки»."""
     rows = await db.scalars(
@@ -455,6 +523,17 @@ async def create_subscription(
     """
     paid = plan.price_kopeks if amount_kopeks is None else amount_kopeks
     expire_at = datetime.now(UTC) + timedelta(days=plan.days)
+
+    # Дедуп: если бот ещё не знает этого пользователя, но в Remnawave уже есть
+    # аккаунт с его telegram_id — продлеваем его выбранным тарифом, а не
+    # заводим второй аккаунт на тот же telegram_id.
+    if await subscription_count(db, user) == 0:
+        adopted = await link_from_remnawave(db, config, user, force=True)
+        if adopted:
+            target = max(adopted, key=lambda r: _aware(r.expire_at) or datetime.min.replace(tzinfo=UTC))
+            return await extend_subscription(
+                db, config, target, plan, source=source, amount_kopeks=paid
+            )
 
     trial = await _trial_key(db, user)
 

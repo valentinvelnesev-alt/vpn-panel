@@ -47,7 +47,9 @@ async def refresh_user_summary(db: AsyncSession, user: BotUser) -> None:
     if not dated:
         return
     best = max(dated, key=lambda r: _aware(r.expire_at))
-    user.remnawave_uuid = str(best.remnawave_id)
+    # remote_ref — uuid у старых панелей (до 2.9), число у новых. Хранить
+    # именно его: числовой id старая панель для адресации не примет.
+    user.remnawave_uuid = str(best.remote_ref)
     user.subscription_url = best.subscription_url
     user.expire_at = best.expire_at
 

@@ -330,6 +330,12 @@ class BotUser(Base, TimestampMixin):
     )
 
     trial_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Бот уже искал существующие аккаунты этого пользователя в Remnawave по
+    # telegram_id и подхватил их. Флаг не даёт дёргать Remnawave на каждый
+    # /start; сбрасывается, когда админ пересинхронизирует пользователя.
+    remnawave_synced: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Пользователь заблокировал бота — рассылка на него не тратится.
     has_stopped_bot: Mapped[bool] = mapped_column(
