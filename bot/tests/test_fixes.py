@@ -917,3 +917,120 @@ def test_plain_url_has_no_access_params() -> None:
     client = RemnawaveClient("https://panel.example.com/", "token")
     assert client._access_params == {}
     assert str(client._client.base_url) == "https://panel.example.com"
+
+
+# ── Синхронизация существующих аккаунтов Remnawave по telegram_id ──────
+def _panel_with_existing(calls, *, tg_id=777, uuid="ex-uuid-1", rid=501):
+    """MockTransport: в Remnawave уже есть аккаунт с этим telegram_id.
+
+    Поиск по by-telegram-id даёт 404 (как на новых панелях) → клиент идёт в
+    stream, который возвращает аккаунт; POST завёл бы дубль — его отсутствие
+    и проверяем.
+    """
+    import json
+
+    account = {
+        **REMOTE,
+        "id": rid,
+        "uuid": uuid,
+        "username": "legacy_account",
+        "telegramId": tg_id,
+        "subscriptionUrl": "https://sub.example/legacy",
+        "expireAt": "2027-01-01T00:00:00.000Z",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else {}
+        calls.append((f"{request.method} {request.url.path}", body))
+        path = request.url.path
+        if "by-telegram-id" in path:
+            return httpx.Response(404, json={"message": "not found"})
+        if path == "/api/users/stream":
+            return httpx.Response(200, json={"response": {"users": [account], "total": 1}})
+        if request.method == "PATCH":
+            # Панель в ответе отдаёт сквады объектами, а не строками, что мы
+            # прислали, — эхоим только срок, остальное берём из аккаунта.
+            merged = {**account, "expireAt": body.get("expireAt", account["expireAt"])}
+            return httpx.Response(200, json={"response": merged})
+        if request.method == "POST":
+            return httpx.Response(200, json={"response": {**REMOTE, "id": 999, "uuid": "new"}})
+        return httpx.Response(200, json={"response": account})
+
+    from shared.remnawave import client as rw
+
+    original = rw.RemnawaveClient.__init__
+
+    def patched(self, base_url, token, **kwargs):
+        original(self, base_url, token, **kwargs)
+        self._client = httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    return patched
+
+
+async def test_existing_remnawave_account_is_linked_not_duplicated(db, config, monkeypatch) -> None:
+    calls: list = []
+    from shared.remnawave import client as rw
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", _panel_with_existing(calls))
+
+    user = await subs.get_or_create_user(db, 777)
+    imported = await subs.link_from_remnawave(db, config, user)
+
+    assert len(imported) == 1
+    assert imported[0].remnawave_uuid == "ex-uuid-1"
+    assert imported[0].remnawave_id == 501
+    assert user.remnawave_synced is True
+    # Пользователь теперь «узнан»: сводка ведёт на существующий ключ.
+    assert user.remnawave_uuid == "ex-uuid-1"
+    # POST /api/users не вызывался — дубль не создан.
+    assert not any(m == "POST /api/users" for m, _ in calls)
+    # Триал такому пользователю уже не положен.
+    assert await subs.trial_available(db, config, user) is False
+
+
+async def test_link_is_idempotent_and_flag_stops_network(db, config, monkeypatch) -> None:
+    calls: list = []
+    from shared.remnawave import client as rw
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", _panel_with_existing(calls))
+
+    user = await subs.get_or_create_user(db, 777)
+    await subs.link_from_remnawave(db, config, user)
+    calls.clear()
+
+    # Второй вызов: флаг стоит — в Remnawave не ходим, дублей нет.
+    again = await subs.link_from_remnawave(db, config, user)
+    assert again == []
+    assert calls == []
+    rows = await subs.list_subscriptions(db, user)
+    assert len(rows) == 1
+
+
+async def test_purchase_adopts_existing_account_instead_of_new_key(db, config, monkeypatch) -> None:
+    """Первая покупка человека, у которого уже есть аккаунт в Remnawave,
+    продлевает его, а не заводит второй аккаунт на тот же telegram_id."""
+    calls: list = []
+    from shared.remnawave import client as rw
+
+    monkeypatch.setattr(rw.RemnawaveClient, "__init__", _panel_with_existing(calls))
+
+    user = await subs.get_or_create_user(db, 777)
+    sub = await subs.create_subscription(db, config, user, PLAN, source="wallet")
+    await db.flush()
+
+    assert sub.remnawave_uuid == "ex-uuid-1"
+    rows = await subs.list_subscriptions(db, user)
+    assert len(rows) == 1  # один ключ, не два
+    assert not any(m == "POST /api/users" for m, _ in calls)
+    assert any(m == "PATCH /api/users" for m, _ in calls)  # продлён существующий
+
+
+async def test_link_no_network_when_user_already_has_key(db, config, remote) -> None:
+    """Если бот уже знает подписки пользователя, синхронизация не нужна."""
+    user = await subs.get_or_create_user(db, 777)
+    await subs.create_subscription(db, config, user, PLAN, source="wallet")
+    before = len(remote)
+    imported = await subs.link_from_remnawave(db, config, user)
+    assert imported == []
+    assert user.remnawave_synced is True
+    assert len(remote) == before  # в Remnawave не ходили

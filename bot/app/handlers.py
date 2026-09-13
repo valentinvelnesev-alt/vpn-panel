@@ -258,6 +258,9 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
             first_name=target.from_user.first_name,
             language_code=target.from_user.language_code,
         )
+        # Узнаём человека по его аккаунтам в Remnawave (заведённым вне бота),
+        # иначе он считался бы новым и получил бы дубль при первой покупке.
+        await subs.link_from_remnawave(db, config, user)
         # Пробный период предлагается только тем, у кого ещё нет ключей.
         trial_available = await subs.trial_available(db, config, user)
         rows = await subs.list_subscriptions(db, user)
@@ -1081,6 +1084,7 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
 async def cb_my_subscriptions(callback: CallbackQuery, config: Config) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
+        await subs.link_from_remnawave(db, config, user)
         rows = await subs.list_subscriptions(db, user)
         titles = await _plan_titles(db, rows)
 
