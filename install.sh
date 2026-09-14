@@ -20,11 +20,17 @@ inf "
 # ── 1. Зависимости ────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || die "Запустите от root:  sudo bash install.sh"
 
-if ! command -v docker >/dev/null; then
-	inf "Docker не найден, устанавливаю…"
-	curl -fsSL https://get.docker.com | sh || die "не удалось установить Docker"
+# Условие охватывает и прерванную ранее установку: если docker поставился, а
+# плагин compose — нет (например, скрипт остановили в середине apt), get.docker.com
+# идемпотентно доустанавливает недостающее при повторном запуске install.sh.
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+	inf "Ставлю Docker (доустанавливаю, если установка прерывалась)…"
+	# Прерванный apt оставляет полу-настроенные пакеты — доводим их до конца,
+	# иначе get.docker.com упрётся в тот же незавершённый dpkg.
+	command -v dpkg >/dev/null 2>&1 && { dpkg --configure -a >/dev/null 2>&1 || true; }
+	curl -fsSL https://get.docker.com | sh || die "не удалось установить Docker. Доведите вручную:  apt-get update && dpkg --configure -a && apt-get -f install -y  — затем запустите install.sh снова"
 fi
-docker compose version >/dev/null 2>&1 || die "нужен Docker Compose v2 (обновите Docker)"
+docker compose version >/dev/null 2>&1 || die "Docker есть, но Compose v2 не работает. Выполните:  dpkg --configure -a && apt-get -f install -y && apt-get install -y docker-compose-plugin  — затем запустите install.sh снова"
 ok "Docker готов"
 
 # ── 2. Существующая установка ─────────────────────────────────────────
