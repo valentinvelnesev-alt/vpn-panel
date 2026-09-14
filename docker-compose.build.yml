@@ -1,0 +1,19 @@
+# Сборка образов из исходников вместо готовых из реестра — для разработки
+# или форка со своим кодом. Обычная установка их не использует: она тянет
+# опубликованные образы (см. docker-compose.yml, install.sh).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+services:
+  panel-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+  bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+  panel-web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile

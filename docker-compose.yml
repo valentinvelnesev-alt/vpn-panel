@@ -35,9 +35,7 @@ services:
 
   panel-api:
     <<: *common
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    image: ${VPN_PANEL_REGISTRY:-ghcr.io/valentinvelnesev-alt}/vpn-panel-panel-api:${VPN_PANEL_TAG:-latest}
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -53,9 +51,7 @@ services:
 
   bot:
     <<: *common
-    build:
-      context: .
-      dockerfile: bot/Dockerfile
+    image: ${VPN_PANEL_REGISTRY:-ghcr.io/valentinvelnesev-alt}/vpn-panel-bot:${VPN_PANEL_TAG:-latest}
     volumes:
       # Картинку меню бот отправляет файлом с диска, а не ссылкой: в режиме
       # по IP порт панели обычно закрыт файрволом, и Telegram не смог бы её
@@ -89,9 +85,7 @@ services:
 
   # Собирает SPA в общий том и завершается.
   panel-web:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
+    image: ${VPN_PANEL_REGISTRY:-ghcr.io/valentinvelnesev-alt}/vpn-panel-panel-web:${VPN_PANEL_TAG:-latest}
     env_file: .env
     networks: [vpnpanel]
     restart: "no"
