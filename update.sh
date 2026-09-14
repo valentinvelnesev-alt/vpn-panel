@@ -58,8 +58,10 @@ DEPLOY_MODE=$(get DEPLOY_MODE)
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${DEPLOY_MODE}.yml"
 
 DB_BACKUP="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S).sql"
+DB_USER=$(get POSTGRES_USER); DB_USER=${DB_USER:-vpnpanel}
+DB_NAME=$(get POSTGRES_DB); DB_NAME=${DB_NAME:-vpnpanel}
 inf "  Создаю дамп базы данных…"
-if $COMPOSE exec -T postgres pg_dump -U postgres vpn_panel < /dev/null > "$DB_BACKUP" 2>/dev/null; then
+if $COMPOSE exec -T postgres pg_dump -U "$DB_USER" "$DB_NAME" < /dev/null > "$DB_BACKUP" 2>/dev/null; then
     ok "Бэкап БД → $DB_BACKUP"
 else
     c '1;33' "  ⚠ Не удалось создать дамп БД (контейнер не запущен?), продолжаю без него"
@@ -106,13 +108,13 @@ fi
 
 # ── 4. Пересобираем и перезапускаем ──────────────────────────────────
 inf "  Обновляю образы и перезапускаю контейнеры…"
-# У panel-api/bot/panel-web нет тега image — только build. `compose pull`
-# на некоторых версиях Docker падает на таких сервисах с ошибкой, и под
-# set -e скрипт молча обрывается ЗДЕСЬ, до пересборки — обновление внешне
-# "проходит", а по факту ничего не меняется. Поэтому pull — только для
-# готовых образов (postgres/redis/caddy) и не должен останавливать скрипт.
-$COMPOSE pull postgres redis caddy 2>/dev/null || true
-$COMPOSE build panel-api bot panel-web
+# По умолчанию тянем готовые образы из реестра — быстро и без сборки на
+# сервере. BUILD_FROM_SOURCE=1 пересобирает локально (форк со своим кодом).
+if [ "${BUILD_FROM_SOURCE:-0}" = 1 ]; then
+    $COMPOSE -f docker-compose.build.yml build panel-api bot panel-web
+else
+    $COMPOSE pull
+fi
 $COMPOSE up -d --remove-orphans
 
 # panel-web — одноразовый контейнер (restart: no): собирает SPA и

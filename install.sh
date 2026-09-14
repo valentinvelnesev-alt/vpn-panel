@@ -106,9 +106,19 @@ chmod 600 "$ENV_FILE"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.$(get DEPLOY_MODE).yml"
 set_ COMPOSE_FILE "docker-compose.yml:docker-compose.$(get DEPLOY_MODE).yml"
 
-inf "
-  Собираю и запускаю (первый раз это несколько минут)…"
-$COMPOSE up -d --build
+# По умолчанию тянем готовые образы из реестра — это секунды вместо минут
+# сборки из исходников. BUILD_FROM_SOURCE=1 собирает локально (форк/разработка).
+if [ "${BUILD_FROM_SOURCE:-0}" = 1 ]; then
+	inf "
+  Собираю образы из исходников…"
+	$COMPOSE -f docker-compose.build.yml build
+	$COMPOSE up -d
+else
+	inf "
+  Скачиваю образы и запускаю…"
+	$COMPOSE pull
+	$COMPOSE up -d
+	fi
 
 inf "  Жду готовности панели…"
 for i in $(seq 1 60); do
