@@ -44,6 +44,22 @@ class RemnawaveError(Exception):
         self.status_code = status_code
 
 
+# Маршруты веб-интерфейса Remnawave: если адрес указан с одним из них,
+# это ссылка на страницу панели, а не база API. API всегда от корня домена.
+_UI_ROUTES = (
+    "/auth",
+    "/login",
+    "/dashboard",
+    "/users",
+    "/nodes",
+    "/subscriptions",
+    "/hosts",
+    "/api-tokens",
+    "/settings",
+    "/management",
+)
+
+
 # Идентификатор пользователя: uuid (старые панели) или id (новые).
 UserRef = int | str
 
@@ -79,7 +95,19 @@ class RemnawaveClient:
         # каждом запросе — иначе API молча недоступен.
         parts = urlsplit(base_url)
         self._access_params = dict(parse_qsl(parts.query))
-        clean = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+        # Пользователи часто вставляют адрес страницы входа целиком
+        # (например …/auth/login?secret=…). Это маршрут SPA Remnawave, а не
+        # база API — она всегда живёт от корня домена. Такой путь отбрасываем,
+        # иначе запросы уходили бы на …/auth/login/api/… и панель «не
+        # подключалась» без внятной ошибки.
+        path = parts.path.rstrip("/")
+        low = path.lower()
+        if any(
+            low == seg or low.startswith(seg + "/")
+            for seg in _UI_ROUTES
+        ):
+            path = ""
+        clean = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
         self._client = httpx.AsyncClient(
             base_url=clean,
