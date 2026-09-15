@@ -21,3 +21,4 @@ backups/
 *.dump
 
 .DS_Store
+*.tsbuildinfo
