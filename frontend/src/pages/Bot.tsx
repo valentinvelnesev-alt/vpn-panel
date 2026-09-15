@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Play, Square, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, Field, Input, Textarea } from '@/components/ui'
 import { panel, type BotStatus, type BotSettings } from '@/lib/api'
 import BotPlans from './BotPlans'
 import BotTraffic from './BotTraffic'
@@ -260,6 +260,18 @@ function SettingsCard({ status }: { status: BotStatus }) {
           save.mutate()
         }}
       >
+        <Field
+          label="Приветственное сообщение"
+          hint="Показывается на первом экране бота. Пусто — стандартный текст. Доступны HTML-разметка и подстановка {brand} (название бота)."
+        >
+          <Textarea
+            value={form.welcome_text ?? ''}
+            onChange={(e) => set('welcome_text', e.target.value || null)}
+            placeholder={'{brand}\n\nБыстрый и безопасный VPN. Выберите тариф или попробуйте бесплатно.'}
+            rows={5}
+          />
+        </Field>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Ссылка на поддержку">
             <Input
