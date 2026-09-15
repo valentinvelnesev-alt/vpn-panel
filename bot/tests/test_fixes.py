@@ -1063,3 +1063,51 @@ def test_genuine_subpath_mount_is_preserved() -> None:
 
     c = RemnawaveClient("https://example.com/remnawave", "t")
     assert str(c._client.base_url).rstrip("/") == "https://example.com/remnawave"
+
+
+# ── Проверка подключения устойчива к отсутствующим эндпоинтам ─────────
+async def test_check_connection_falls_back_when_metadata_404(monkeypatch) -> None:
+    """У части сборок Remnawave /api/system/metadata отдаёт 404 — проверка
+    подключения должна пройти по следующему доступному эндпоинту."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/api/system/metadata":
+            return httpx.Response(404, json={"message": "not found"})
+        if request.url.path == "/api/system/health":
+            return httpx.Response(200, json={"response": {"ok": True}})
+        return httpx.Response(200, json={"response": {}})
+
+    from shared.remnawave.client import RemnawaveClient
+
+    client = RemnawaveClient("https://panel.example.com", "token")
+    client._client = httpx.AsyncClient(
+        base_url="https://panel.example.com", transport=httpx.MockTransport(handler)
+    )
+    try:
+        result = await client.check_connection()
+    finally:
+        await client.aclose()
+
+    assert result == {"ok": True}
+    assert seen == ["/api/system/metadata", "/api/system/health"]
+
+
+async def test_check_connection_reports_when_all_404(monkeypatch) -> None:
+    from shared.remnawave.client import RemnawaveClient, RemnawaveError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "not found"})
+
+    client = RemnawaveClient("https://panel.example.com", "token")
+    client._client = httpx.AsyncClient(
+        base_url="https://panel.example.com", transport=httpx.MockTransport(handler)
+    )
+    try:
+        import pytest as _pytest
+
+        with _pytest.raises(RemnawaveError):
+            await client.check_connection()
+    finally:
+        await client.aclose()

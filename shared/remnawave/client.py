@@ -186,8 +186,31 @@ class RemnawaveClient:
         return await self._request("PATCH", path, **kwargs)
 
     # ── Проверка подключения ──────────────────────────────────────────
+    # Пробуем несколько системных эндпоинтов: у некоторых сборок Remnawave
+    # часть путей закрыта или отдаёт 404, а нам достаточно, чтобы ответил
+    # любой — это подтверждает, что адрес и токен рабочие.
+    _HEALTHCHECK_PATHS = (
+        "/api/system/metadata",
+        "/api/system/health",
+        "/api/system/stats",
+    )
+
     async def check_connection(self) -> dict[str, Any]:
-        return await self._get("/api/system/metadata") or {}
+        last: RemnawaveError | None = None
+        for path in self._HEALTHCHECK_PATHS:
+            try:
+                return await self._get(path) or {}
+            except RemnawaveError as exc:
+                # 404 — этого пути тут нет, пробуем следующий. Прочие ошибки
+                # (401 токен, 5xx, сеть) относятся к подключению в целом.
+                if exc.status_code == 404:
+                    last = exc
+                    continue
+                raise
+        raise last or RemnawaveError(
+            "Remnawave отвечает, но API не найден по этому адресу — "
+            "проверьте, что указан адрес именно панели Remnawave"
+        )
 
     async def get_stats(self) -> SystemStats:
         return self._parse(SystemStats, await self._get("/api/system/stats"))
