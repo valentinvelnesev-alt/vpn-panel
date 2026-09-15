@@ -1034,3 +1034,32 @@ async def test_link_no_network_when_user_already_has_key(db, config, remote) -> 
     assert imported == []
     assert user.remnawave_synced is True
     assert len(remote) == before  # в Remnawave не ходили
+
+
+# ── Адрес Remnawave вставлен со страницей входа ───────────────────────
+def test_login_page_path_is_stripped_from_base_url() -> None:
+    """Пользователь вставил адрес страницы входа целиком (…/auth/login?secret=…).
+    Клиент должен обращаться к API от корня домена, а не к …/auth/login/api/…"""
+    from shared.remnawave.client import RemnawaveClient
+
+    client = RemnawaveClient(
+        "https://panel.workatlas.ru/auth/login?iQkWIalL=MnudvETd", "token"
+    )
+    assert str(client._client.base_url) == "https://panel.workatlas.ru"
+    assert client._access_params == {"iQkWIalL": "MnudvETd"}
+
+
+def test_various_ui_routes_are_stripped() -> None:
+    from shared.remnawave.client import RemnawaveClient
+
+    for path in ("/auth/login", "/dashboard/users", "/nodes", "/settings", "/api-tokens"):
+        c = RemnawaveClient(f"https://panel.example.com{path}", "t")
+        assert str(c._client.base_url) == "https://panel.example.com", path
+
+
+def test_genuine_subpath_mount_is_preserved() -> None:
+    """Панель, поднятая под своим префиксом (не UI-маршрут), не ломается."""
+    from shared.remnawave.client import RemnawaveClient
+
+    c = RemnawaveClient("https://example.com/remnawave", "t")
+    assert str(c._client.base_url).rstrip("/") == "https://example.com/remnawave"
