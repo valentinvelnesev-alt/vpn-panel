@@ -1,4 +1,9 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react'
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes,
+} from 'react'
 import { cn } from '@/lib/cn'
 
 export function Button({
@@ -35,6 +40,23 @@ export function Input({
     <input
       className={cn(
         'h-11 w-full rounded-2xl border bg-bg/60 px-4 text-sm backdrop-blur-sm',
+        'transition-colors placeholder:text-muted',
+        'focus:border-accent/60',
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+export function Textarea({
+  className,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={cn(
+        'min-h-28 w-full rounded-2xl border bg-bg/60 px-4 py-3 text-sm backdrop-blur-sm',
         'transition-colors placeholder:text-muted',
         'focus:border-accent/60',
         className,
