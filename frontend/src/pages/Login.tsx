@@ -16,8 +16,15 @@ export default function Login() {
     onSuccess: (admin) => queryClient.setQueryData(['me'], admin),
     onError: (error) => {
       // Второй фактор запрашиваем только когда сервер его действительно ждёт.
-      if (error instanceof ApiError && error.message.includes('двухфактор')) {
+      // Сам запрос кода — не ошибка: показываем поле без красного текста.
+      if (
+        error instanceof ApiError &&
+        error.message.includes('двухфактор') &&
+        !needsTotp &&
+        !totp
+      ) {
         setNeedsTotp(true)
+        mutation.reset()
       }
     },
   })

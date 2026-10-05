@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   BarChart3,
   Bot,
+  Contact,
   CreditCard,
   LayoutDashboard,
   LogOut,
@@ -14,12 +15,14 @@ import {
 import { NavLink, Outlet } from 'react-router-dom'
 import { auth } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useBrand } from '@/lib/brand'
 import { useNavStyle } from '@/lib/navStyle'
 
 const NAV = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard, end: true },
   { to: '/nodes', label: 'Ноды', icon: Server },
   { to: '/users', label: 'Пользователи', icon: Users },
+  { to: '/clients', label: 'Клиенты бота', icon: Contact },
   { to: '/bot', label: 'Бот', icon: Bot },
   { to: '/broadcasts', label: 'Рассылки', icon: Send },
   { to: '/payments', label: 'Платежи', icon: CreditCard },
@@ -28,12 +31,17 @@ const NAV = [
 ]
 
 function Brand({ compact = false }: { compact?: boolean }) {
+  const { title, logo } = useBrand()
   return (
-    <div className={cn('flex items-center gap-2', compact ? '' : 'px-3 py-4')}>
-      <span className="grid size-8 place-items-center rounded-2xl bg-accent/15 text-accent">
-        <Shield className="size-4" />
-      </span>
-      <span className="text-sm font-semibold tracking-tight">VPN Panel</span>
+    <div className={cn('flex min-w-0 items-center gap-2', compact ? '' : 'px-3 py-4')}>
+      {logo ? (
+        <img src={logo} alt="" className="size-8 shrink-0 rounded-2xl object-cover" />
+      ) : (
+        <span className="grid size-8 shrink-0 place-items-center rounded-2xl bg-accent/15 text-accent">
+          <Shield className="size-4" />
+        </span>
+      )}
+      <span className="truncate text-sm font-semibold tracking-tight">{title}</span>
     </div>
   )
 }

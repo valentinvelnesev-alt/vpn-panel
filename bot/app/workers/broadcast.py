@@ -14,12 +14,15 @@
 
 import asyncio
 import logging
+import os
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 
@@ -33,6 +36,27 @@ CHECK_INTERVAL = 10
 SEND_DELAY = 0.05  # ~20 сообщений в секунду — с запасом от лимитов Telegram
 # Рассылка в `sending` без heartbeat дольше этого считается брошенной.
 STALE_AFTER = timedelta(minutes=2)
+# Тот же том, куда панель сохраняет загруженные фото (docker-compose: uploads).
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/app/uploads")
+
+# Будит воркер сразу после создания рассылки в панели. Раньше супервизор
+# отправлял рассылку прямо в цикле приёма команд — и пока она шла, бот не
+# реагировал ни на «Остановить», ни на подтверждения оплат.
+wakeup = asyncio.Event()
+
+
+def _local_photo(photo_url: str) -> str | None:
+    """Путь к фото на диске, если оно загружено через панель.
+
+    Шлём файл, а не ссылку: по ссылке его должны скачать серверы Telegram,
+    а панель часто закрыта файрволом или работает по IP без HTTPS — тогда
+    фото не уходило никому."""
+    path = urlparse(photo_url).path
+    if not path.startswith("/uploads/"):
+        return None
+    name = os.path.basename(path)
+    full = os.path.join(UPLOAD_DIR, name)
+    return full if name and os.path.isfile(full) else None
 
 
 def _keyboard(buttons: list[dict]):
@@ -65,6 +89,8 @@ async def _claim_due_broadcast() -> int | None:
             )
             .order_by(Broadcast.scheduled_at)
             .limit(1)
+            # SKIP LOCKED: два прохода воркера не схватят одну рассылку.
+            .with_for_update(skip_locked=True)
         )
         if row is None:
             row = await db.scalar(
@@ -76,6 +102,7 @@ async def _claim_due_broadcast() -> int | None:
                 )
                 .order_by(Broadcast.started_at)
                 .limit(1)
+                .with_for_update(skip_locked=True)
             )
             if row is not None:
                 log.warning("Возобновляю брошенную рассылку %s с курсора %s", row.id, row.cursor_user_id)
@@ -110,18 +137,25 @@ async def _send(broadcast_id: int, token: str) -> None:
         photo_url = broadcast.photo_url
 
     bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    # Файл загружается в Telegram один раз, дальше идёт его file_id.
+    photo = None
+    if photo_url:
+        local = _local_photo(photo_url)
+        photo = FSInputFile(local) if local else photo_url
     try:
         for user in recipients:
             ok = False
             for _attempt in range(3):
                 try:
-                    if photo_url:
-                        await bot.send_photo(
+                    if photo is not None:
+                        sent = await bot.send_photo(
                             user.telegram_id,
-                            photo_url,
+                            photo,
                             caption=text,
                             reply_markup=keyboard,
                         )
+                        if isinstance(photo, FSInputFile) and sent.photo:
+                            photo = sent.photo[-1].file_id
                     else:
                         await bot.send_message(user.telegram_id, text, reply_markup=keyboard)
                     ok = True
@@ -182,6 +216,7 @@ async def run_once(token: str | None) -> bool:
 
 async def worker(token: str) -> None:
     while True:
+        wakeup.clear()
         try:
             # Догоняем все наступившие рассылки за проход, не только одну.
             while await run_once(token):
@@ -190,4 +225,7 @@ async def worker(token: str) -> None:
             raise
         except Exception:  # noqa: BLE001
             log.exception("Сбой в воркере рассылок")
-        await asyncio.sleep(CHECK_INTERVAL)
+        try:
+            await asyncio.wait_for(wakeup.wait(), timeout=CHECK_INTERVAL)
+        except TimeoutError:
+            pass

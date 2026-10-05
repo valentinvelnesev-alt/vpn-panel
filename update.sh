@@ -42,7 +42,7 @@ trap 'err "Обновление прервано на строке $LINENO: $BAS
 
 inf "
 ╭──────────────────────────────────────╮
-│         VPN Panel · обновление       │
+│          Обновление панели           │
 ╰──────────────────────────────────────╯"
 
 # ── 1. Бэкап .env ─────────────────────────────────────────────────────
@@ -116,6 +116,10 @@ else
     $COMPOSE pull
 fi
 $COMPOSE up -d --remove-orphans
+# Caddy монтирует конфиг из репозитория отдельным файлом; git reset
+# подменяет файл новым, а контейнер продолжает видеть старый, пока его не
+# пересоздать. Без этого изменения Caddyfile не применялись бы.
+$COMPOSE up -d --force-recreate --no-deps caddy
 
 # panel-web — одноразовый контейнер (restart: no): собирает SPA и
 # завершается. Docker Compose иногда решает, что раз он уже "Exited (0)",
@@ -139,6 +143,16 @@ if $COMPOSE exec -T panel-api alembic upgrade head < /dev/null; then
 else
     c '1;33' "  ⚠ Не удалось применить миграции автоматически — выполните вручную:"
     echo "      docker compose exec panel-api alembic upgrade head"
+fi
+
+# ── 4.6 Секретный путь панели ─────────────────────────────────────────
+if [ -z "$(get PANEL_SECRET_PATH)" ]; then
+    c '1;33' "
+  ⚠ Панель открывается по адресу сервера без секретного пути — любой
+    сканер видит страницу входа. Включить (ссылка изменится!):
+      sed -i '/^PANEL_SECRET_PATH=/d' .env && echo \"PANEL_SECRET_PATH=\$(openssl rand -hex 6)\" >> .env
+      $COMPOSE up -d --force-recreate panel-api caddy
+      grep PANEL_SECRET_PATH .env   # панель: <адрес>/<этот путь>"
 fi
 
 # ── 5. Готово ─────────────────────────────────────────────────────────

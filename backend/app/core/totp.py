@@ -1,6 +1,7 @@
 import pyotp
 
-ISSUER = "VPN Panel"
+# Нейтральное имя: оно видно в приложении-аутентификаторе на телефоне.
+ISSUER = "Panel"
 
 
 def generate_secret() -> str:

@@ -53,9 +53,9 @@ services:
     <<: *common
     image: ${VPN_PANEL_REGISTRY:-ghcr.io/valentinvelnesev-alt}/vpn-panel-bot:${VPN_PANEL_TAG:-latest}
     volumes:
-      # Картинку меню бот отправляет файлом с диска, а не ссылкой: в режиме
-      # по IP порт панели обычно закрыт файрволом, и Telegram не смог бы её
-      # скачать.
+      # Картинку меню и фото рассылок бот отправляет файлом с диска, а не
+      # ссылкой: в режиме по IP порт панели обычно закрыт файрволом, и
+      # Telegram не смог бы их скачать.
       - uploads:/app/uploads:ro
     depends_on:
       postgres: {condition: service_healthy}

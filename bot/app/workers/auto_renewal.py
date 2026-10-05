@@ -17,7 +17,9 @@ from sqlalchemy import select
 
 from app import config as config_module
 from app import texts
-from app.services import subscriptions as subs, wallet
+from app.config import discounted_kopeks
+from app.services import payment_processor, wallet
+from app.services import subscriptions as subs
 from app.services.notify import send
 from shared.db.models import BotSubscription, BotUser, Plan, WalletTxType
 from shared.db.session import session
@@ -29,8 +31,8 @@ WINDOW = timedelta(hours=24)
 GRACE = timedelta(hours=24)
 
 
-async def _renew_one(subscription_id: int) -> tuple[int, str] | None:
-    """Возвращает (telegram_id, текст уведомления) при успехе."""
+async def _renew_one(subscription_id: int):
+    """При успехе: (telegram_id, текст, конфиг, user_id, сумма, тариф)."""
     now = datetime.now(UTC)
     async with session() as db:
         config = await config_module.load(db)
@@ -57,11 +59,14 @@ async def _renew_one(subscription_id: int) -> tuple[int, str] | None:
         if user is None:
             return None
 
+        # Общая акция из панели действует и на автопродление; скидка по
+        # промокоду — нет: она обещана на оплату, которую клиент делает сам.
+        amount = discounted_kopeks(plan.price_kopeks, config.plan_discount(plan, 0))
         try:
             await wallet.debit(
                 db,
                 user,
-                plan.price_kopeks,
+                amount,
                 WalletTxType.AUTO_RENEWAL,
                 description=f"Автопродление: {plan.title}",
             )
@@ -69,7 +74,7 @@ async def _renew_one(subscription_id: int) -> tuple[int, str] | None:
             return None  # не хватает баланса — пропускаем без ошибки
 
         subscription = await subs.extend_subscription(
-            db, config, subscription, plan, source="auto_renewal"
+            db, config, subscription, plan, source="auto_renewal", amount_kopeks=amount
         )
         text = texts.render(
             "{@check} Подписка «{title}» автоматически продлена до {until}",
@@ -78,7 +83,7 @@ async def _renew_one(subscription_id: int) -> tuple[int, str] | None:
             title=plan.title,
             until=subscription.expire_at.strftime("%d.%m.%Y") if subscription.expire_at else "—",
         )
-        return user.telegram_id, text, config.token
+        return user.telegram_id, text, config, user.id, amount, plan.full_title
 
 
 async def run_once() -> int:
@@ -105,9 +110,14 @@ async def run_once() -> int:
             continue
         if result is None:
             continue
-        telegram_id, text, token = result
+        telegram_id, text, config, user_id, amount, title = result
         renewed += 1
-        await send(token, telegram_id, text)
+        await send(config.token, telegram_id, text)
+        # Комиссия рефереру и уведомление о продаже в чат — как у ручной
+        # оплаты с баланса; раньше автопродления в чат продаж не попадали.
+        await payment_processor.after_purchase_effects(
+            config, user_id, amount, title, kind="auto_renewal", method="auto_renewal"
+        )
         await asyncio.sleep(0.05)
 
     if renewed:

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.api.deps import CurrentAdmin, DbSession
 from shared.db.models import AuditLog
@@ -114,7 +114,27 @@ async def check_remnawave(
     )
 
 
-# ── White-label (Pro) ───────────────────────────────────────────────────
+# ── Название и логотип панели ───────────────────────────────────────────
+DEFAULT_TITLE = "Panel"
+
+
+class PublicBrandOut(BaseModel):
+    title: str
+    logo_url: str | None
+
+
+@router.get("/brand/public", response_model=PublicBrandOut)
+async def get_public_brand(db: DbSession) -> PublicBrandOut:
+    """Без авторизации: нужно странице входа для <title> и шапки. Отдаёт
+    только то, что админ сам задал показывать, — по умолчанию нейтральное
+    «Panel», а не «VPN Panel», чтобы вкладка не выдавала, что это за сервис."""
+    values = await cfg.get_many(db, cfg.BRAND_NAME, cfg.BRAND_LOGO_URL)
+    return PublicBrandOut(
+        title=(values[cfg.BRAND_NAME] or "").strip() or DEFAULT_TITLE,
+        logo_url=values[cfg.BRAND_LOGO_URL] or None,
+    )
+
+
 class BrandOut(BaseModel):
     brand_name: str | None
     brand_logo_url: str | None
@@ -125,6 +145,14 @@ class BrandIn(BaseModel):
     brand_name: str | None = Field(default=None, max_length=64)
     brand_logo_url: str | None = Field(default=None, max_length=512)
     hide_powered_by: bool = False
+
+    @field_validator("brand_logo_url")
+    @classmethod
+    def _logo_url(cls, value: str | None) -> str | None:
+        value = (value or "").strip() or None
+        if value and not value.startswith(("https://", "http://", "/", "data:image/")):
+            raise ValueError("Ссылка на логотип должна начинаться с https://")
+        return value
 
 
 @router.get("/brand", response_model=BrandOut)
@@ -140,8 +168,18 @@ async def get_brand(admin: CurrentAdmin, db: DbSession) -> BrandOut:
 
 
 @router.put("/brand", response_model=BrandOut)
-async def save_brand(data: BrandIn, admin: CurrentAdmin, db: DbSession) -> BrandOut:
-    await cfg.set_(db, cfg.BRAND_NAME, data.brand_name)
+async def save_brand(
+    data: BrandIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> BrandOut:
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="settings.brand",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    await cfg.set_(db, cfg.BRAND_NAME, (data.brand_name or "").strip() or None)
     await cfg.set_(db, cfg.BRAND_LOGO_URL, data.brand_logo_url)
     await cfg.set_(db, cfg.HIDE_POWERED_BY, "true" if data.hide_powered_by else "false")
     return await get_brand(admin, db)

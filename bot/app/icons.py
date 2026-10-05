@@ -99,10 +99,15 @@ ICONS: Final[dict[str, Icon]] = {
 }
 
 
+# Передаётся вместо карты, когда в панели выключены премиум-эмодзи:
+# кнопки рисуются без иконок.
+ICONS_OFF: Final[dict[str, str]] = {}
+
+
 def icon_id(key: str | None, overrides: dict[str, str] | None = None) -> str | None:
     """id иконки для кнопки. Карта из панели важнее встроенной — так
     владелец меняет оформление, не трогая код."""
-    if not key:
+    if not key or overrides is ICONS_OFF:
         return None
     if overrides:
         found = overrides.get(key)

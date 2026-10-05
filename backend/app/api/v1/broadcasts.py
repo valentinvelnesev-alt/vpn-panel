@@ -1,7 +1,10 @@
 import asyncio
+import html
 import os
+import re
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from fastapi import (
     APIRouter,
@@ -12,7 +15,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentAdmin, DbSession
@@ -26,6 +29,28 @@ router = APIRouter(prefix="/broadcasts", tags=["broadcasts"])
 
 MAX_PHOTO_BYTES = 8 * 1024 * 1024  # 8 МБ — с запасом под лимит Telegram (10 МБ)
 ALLOWED_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+# Подпись к фото в Telegram — не длиннее 1024 видимых символов. Длиннее —
+# Telegram отклоняет сообщение каждому получателю, рассылка уходит в ноль.
+MAX_CAPTION = 1024
+MAX_TEXT = 4096
+
+_TAG = re.compile(r"<[^>]+>")
+
+
+def visible_length(text: str) -> int:
+    """Длина так, как её считает Telegram: без HTML-тегов, сущности — как символ."""
+    return len(html.unescape(_TAG.sub("", text)))
+
+
+def local_upload_path(photo_url: str | None) -> str | None:
+    if not photo_url:
+        return None
+    path = urlparse(photo_url).path
+    if not path.startswith("/uploads/"):
+        return None
+    name = os.path.basename(path)
+    full = os.path.join(settings.upload_dir, name)
+    return full if name and os.path.isfile(full) else None
 
 
 @router.post("/upload-photo")
@@ -57,10 +82,28 @@ class ButtonIn(BaseModel):
     url: str = Field(min_length=1, max_length=512)
 
 
-class BroadcastIn(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+class BroadcastContent(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)
     photo_url: str | None = Field(default=None, max_length=512)
     buttons: list[ButtonIn] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def _fits_telegram(self) -> "BroadcastContent":
+        length = visible_length(self.text)
+        if self.photo_url and length > MAX_CAPTION:
+            raise ValueError(
+                f"С фото текст должен быть не длиннее {MAX_CAPTION} символов "
+                f"(сейчас {length}) — это ограничение Telegram на подпись к фото"
+            )
+        if length > MAX_TEXT:
+            raise ValueError(f"Текст длиннее {MAX_TEXT} символов (сейчас {length})")
+        for button in self.buttons:
+            if not button.url.startswith(("https://", "http://", "tg://")):
+                raise ValueError(f"Ссылка кнопки «{button.text}» должна начинаться с https://")
+        return self
+
+
+class BroadcastIn(BroadcastContent):
     segment: BroadcastSegment = BroadcastSegment.ALL
     # Пусто = отправить сейчас.
     scheduled_at: datetime | None = None
@@ -158,6 +201,7 @@ async def create_broadcast(
         )
     )
     await db.flush()
+    out = _out(broadcast)
 
     if send_now:
         # Коммит до pub/sub: воркер бота читает рассылку своей сессией и
@@ -165,7 +209,50 @@ async def create_broadcast(
         await db.commit()
         await bus.publish(bus.EVENT_BROADCAST_READY)
 
-    return _out(broadcast)
+    return out
+
+
+class TestOut(BaseModel):
+    ok: bool
+    message: str
+
+
+@router.post("/test", response_model=TestOut)
+async def test_broadcast(
+    data: BroadcastContent, admin: CurrentAdmin, db: DbSession
+) -> TestOut:
+    """Отправляет рассылку только администраторам бота (Бот → Администраторы)
+    — посмотреть фото, подпись, кнопки и разметку до отправки всем."""
+    from app.services import telegram
+    from shared.crypto import decrypt
+    from shared.db.models import BotConfig
+
+    row = await db.get(BotConfig, 1)
+    if row is None or not row.token_encrypted:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Сначала подключите бота")
+    if not row.admin_telegram_ids:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Укажите свой Telegram ID в «Бот → Администраторы бота» — туда придёт тест",
+        )
+    token = decrypt(row.token_encrypted)
+    buttons = [b.model_dump() for b in data.buttons]
+    errors = []
+    for chat_id in row.admin_telegram_ids:
+        try:
+            await telegram.send_broadcast_test(
+                token,
+                chat_id,
+                data.text,
+                photo_path=local_upload_path(data.photo_url),
+                photo_url=data.photo_url,
+                buttons=buttons,
+            )
+        except telegram.TelegramError as exc:
+            errors.append(f"{chat_id}: {exc}")
+    if errors:
+        return TestOut(ok=False, message="Telegram отклонил: " + "; ".join(errors))
+    return TestOut(ok=True, message="Тест отправлен администраторам бота")
 
 
 @router.delete("/{broadcast_id}", status_code=status.HTTP_204_NO_CONTENT)

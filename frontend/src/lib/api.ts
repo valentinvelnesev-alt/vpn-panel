@@ -65,11 +65,34 @@ export interface Admin {
   totp_enabled: boolean
 }
 
+export interface TotpSetup {
+  secret: string
+  otpauth_uri: string
+  qr_svg: string | null
+}
+
 export const auth = {
   me: () => api<Admin>('/auth/me'),
   login: (login: string, password: string, totp_code?: string) =>
     api<Admin>('/auth/login', { method: 'POST', json: { login, password, totp_code } }),
   logout: () => api<void>('/auth/logout', { method: 'POST' }),
+  logoutAll: () => api<void>('/auth/logout-all', { method: 'POST' }),
+  totpSetup: () => api<TotpSetup>('/auth/totp/setup', { method: 'POST' }),
+  totpEnable: (code: string) =>
+    api<Admin>('/auth/totp/enable', { method: 'POST', json: { code } }),
+  totpDisable: (password: string, code: string) =>
+    api<Admin>('/auth/totp/disable', { method: 'POST', json: { password, code } }),
+}
+
+export interface PublicBrand {
+  title: string
+  logo_url: string | null
+}
+
+export interface BrandSettings {
+  brand_name: string | null
+  brand_logo_url: string | null
+  hide_powered_by: boolean
 }
 
 export interface NodeLoad {
@@ -187,6 +210,8 @@ export interface BotSettings {
   admin_telegram_ids: number[]
   privacy_policy_url: string | null
   terms_url: string | null
+  allow_multiple_subscriptions: boolean
+  menu_hidden: string[]
 }
 
 export interface BotStatus extends BotSettings {
@@ -206,6 +231,40 @@ export interface BotStatus extends BotSettings {
   premium_emoji: Record<string, string>
   node_alerts_enabled: boolean
   node_alerts_chat_id: number | null
+  discount_percent: number
+  discount_until: string | null
+}
+
+export interface ClientRow {
+  id: number
+  telegram_id: number
+  username: string | null
+  first_name: string | null
+  balance_rub: number
+  subscriptions: number
+  expire_at: string | null
+  created_at: string
+  last_seen_at: string | null
+  has_stopped_bot: boolean
+}
+
+export interface ClientDetail extends ClientRow {
+  pending_discount_percent: number
+  subscriptions_list: {
+    id: number
+    username: string
+    expire_at: string | null
+    subscription_url: string | null
+  }[]
+  transactions: {
+    id: number
+    amount_rub: number
+    type: string
+    description: string | null
+    created_at: string
+  }[]
+  purchases: { id: number; days: number; amount_rub: number; source: string; created_at: string }[]
+  personal_plans: Plan[]
 }
 
 export interface PlanInput {
@@ -396,6 +455,35 @@ export const panel = {
 
   saveBotSettings: (json: BotSettings) =>
     api<BotStatus>('/bot/settings', { method: 'PUT', json }),
+  saveDiscount: (json: { percent: number; days: number | null }) =>
+    api<BotStatus>('/bot/discount', { method: 'PUT', json }),
+  setPremiumEmoji: (enabled: boolean) =>
+    api<{ ok: boolean; message: string; status: BotStatus }>('/bot/emoji', {
+      method: 'PUT',
+      json: { mode: enabled ? 'premium' : 'plain' },
+    }),
+  testNotifyChat: (chat: string) =>
+    api<{ ok: boolean; message: string; chat_id: number | null }>('/bot/notify-chat/test', {
+      method: 'POST',
+      json: { chat },
+    }),
+
+  clients: (params: { search?: string; offset?: number; limit?: number }) => {
+    const query = new URLSearchParams()
+    if (params.search) query.set('search', params.search)
+    if (params.offset) query.set('offset', String(params.offset))
+    if (params.limit) query.set('limit', String(params.limit))
+    return api<{ items: ClientRow[]; total: number }>(`/bot/clients?${query}`)
+  },
+  client: (id: number) => api<ClientDetail>(`/bot/clients/${id}`),
+  adjustBalance: (id: number, json: { amount_rub: number; reason: string; notify: boolean }) =>
+    api<ClientDetail>(`/bot/clients/${id}/balance`, { method: 'POST', json }),
+  createPersonalPlan: (id: number, json: PlanInput) =>
+    api<Plan>(`/bot/clients/${id}/plans`, { method: 'POST', json }),
+  updatePersonalPlan: (id: number, planId: number, json: PlanInput) =>
+    api<Plan>(`/bot/clients/${id}/plans/${planId}`, { method: 'PUT', json }),
+  deletePersonalPlan: (id: number, planId: number) =>
+    api<void>(`/bot/clients/${id}/plans/${planId}`, { method: 'DELETE' }),
   setEmojiMode: (json: {
     mode: 'plain' | 'premium'
     premium_emoji: Record<string, string>
@@ -450,6 +538,8 @@ export const panel = {
   createBroadcast: (json: BroadcastInput) =>
     api<BroadcastRow>('/broadcasts', { method: 'POST', json }),
   cancelBroadcast: (id: number) => api<void>(`/broadcasts/${id}`, { method: 'DELETE' }),
+  testBroadcast: (json: Pick<BroadcastInput, 'text' | 'photo_url' | 'buttons'>) =>
+    api<{ ok: boolean; message: string }>('/broadcasts/test', { method: 'POST', json }),
   uploadBroadcastPhoto: async (file: File) => {
     const form = new FormData()
     form.append('file', file)
@@ -475,6 +565,10 @@ export const panel = {
     api<TrafficPackage>(`/bot/traffic-packages/${id}`, { method: 'PUT', json }),
   deleteTrafficPackage: (id: number) =>
     api<void>(`/bot/traffic-packages/${id}`, { method: 'DELETE' }),
+  publicBrand: () => api<PublicBrand>('/settings/brand/public'),
+  brand: () => api<BrandSettings>('/settings/brand'),
+  saveBrand: (json: BrandSettings) =>
+    api<BrandSettings>('/settings/brand', { method: 'PUT', json }),
 
   remnawaveSettings: () => api<RemnawaveSettings>('/settings/remnawave'),
   saveRemnawave: (json: {

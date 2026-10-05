@@ -6,7 +6,9 @@ from app.api.v1 import (
     backups,
     bot,
     broadcasts,
+    clients,
     dashboard,
+    gate,
     health,
     nodes,
     payments,
@@ -19,12 +21,14 @@ from app.api.v1 import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
+api_router.include_router(gate.router)
 api_router.include_router(auth.router)
 api_router.include_router(settings.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(nodes.router)
 api_router.include_router(users.router)
 api_router.include_router(bot.router)
+api_router.include_router(clients.router)
 api_router.include_router(payments.router)
 api_router.include_router(promo.router)
 api_router.include_router(referrals.router)

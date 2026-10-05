@@ -261,13 +261,11 @@ class Supervisor:
 
                     await handle(message["payment_id"])
                 elif command == bus.EVENT_BROADCAST_READY:
-                    # Ускоряет реакцию — без этого воркер подхватит рассылку
-                    # сам в течение CHECK_INTERVAL секунд.
-                    if self._config and self._config.token:
-                        from app.workers.broadcast import run_once
+                    # Только будим воркер: отправка здесь, в цикле команд,
+                    # блокировала шину на всё время рассылки.
+                    from app.workers.broadcast import wakeup
 
-                        while await run_once(self._config.token):
-                            pass
+                    wakeup.set()
             except Exception:  # noqa: BLE001
                 log.exception("Ошибка при обработке команды %s", command)
 

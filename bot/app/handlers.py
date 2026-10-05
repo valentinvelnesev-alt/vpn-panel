@@ -27,6 +27,7 @@ from aiogram.types import (
 from sqlalchemy import func, select
 
 from app import connection, keyboards, texts
+from app.icons import ICONS_OFF
 from app.config import (
     Config,
     PlanView,
@@ -36,6 +37,7 @@ from app.config import (
 )
 from app.services import (
     payment_check,
+    pricing,
     payment_flow,
     payment_processor,
     promo as promo_service,
@@ -139,6 +141,11 @@ async def send_new_screen(
     **kwargs: object,
 ) -> None:
     await _send_screen(message, text, reply_markup, photo=config.menu_photo_path, **kwargs)
+
+
+def _icons(config: Config) -> dict[str, str]:
+    """Карта иконок для кнопок: в обычном режиме эмодзи — без иконок."""
+    return config.premium_emoji if config.premium else ICONS_OFF
 
 
 def t(config: Config, template: str, **values: object) -> str:
@@ -318,7 +325,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
     # Telegram не разрешает и inline-кнопки, и клавиатуру под полем ввода.
     await message.answer(
         t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
-        reply_markup=keyboards.reply_menu(),
+        reply_markup=keyboards.reply_menu(config),
     )
     await _show_menu(message, config)
 
@@ -334,6 +341,13 @@ async def on_menu_button(message: Message, config: Config, state: FSMContext) ->
 @router.message(F.text == keyboards.BTN_HELP)
 async def on_help_button(message: Message, config: Config, state: FSMContext) -> None:
     await state.clear()
+    if not config.shows("help"):
+        # Кнопку скрыли в панели, а у клиента ещё старая клавиатура —
+        # показываем меню вместе с уже обновлённой клавиатурой.
+        await message.answer(t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
+                             reply_markup=keyboards.reply_menu(config))
+        await _show_menu(message, config)
+        return
     if config.support_url:
         await message.answer(
             t(
@@ -364,6 +378,9 @@ async def cb_check_sub(callback: CallbackQuery, config: Config, bot: Bot) -> Non
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, config: Config) -> None:
+    if not config.shows("help"):
+        await _show_menu(message, config)
+        return
     await message.answer(t(config, texts.HELP))
 
 
@@ -446,41 +463,104 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 
 
 # ── Тарифы ────────────────────────────────────────────────────────────
-@router.callback_query(F.data == "plans")
-async def cb_plans(callback: CallbackQuery, config: Config) -> None:
-    if not config.plans:
+async def _plans_context(db, config: Config, telegram_id: int):
+    """(скидка клиента по промокоду, его персональные тарифы)."""
+    user = await subs.get_or_create_user(db, telegram_id)
+    return user.discount_percent or 0, await pricing.personal_plans(db, user)
+
+
+async def _show_plans(
+    callback: CallbackQuery, config: Config, *, prefix: str = "buy", back: str = "menu"
+) -> None:
+    async with session() as db:
+        discount, personal = await _plans_context(db, config, callback.from_user.id)
+
+    if not config.plans and not personal:
         await screen(callback.message, config, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
         await callback.answer()
         return
 
-    async with session() as db:
-        discount = await _user_discount(db, callback.from_user.id)
-
-    categories = keyboards.plan_categories(config)
-    if categories:
+    if keyboards.plan_categories(config):
         # Больше одной категории тарифов — сперва даём выбрать категорию,
         # чтобы длинный список не сваливался в одну простыню кнопок.
         await screen(
             callback.message,
             config,
-            t(config, "{@card} <b>Выберите тариф</b>"),
-            keyboards.categories_menu(config, discount_percent=discount),
+            _plans_header(config, discount, choose_category=True),
+            keyboards.categories_menu(
+                config, prefix=prefix, back=back, discount_percent=discount, personal=personal
+            ),
         )
     else:
         await screen(
             callback.message,
             config,
             _plans_header(config, discount),
-            keyboards.plans_menu(config, discount_percent=discount),
+            keyboards.plans_menu(
+                config, prefix=prefix, discount_percent=discount, back=back, personal=personal
+            ),
         )
     await callback.answer()
 
 
-def _plans_header(config: Config, discount: int, category_title: str | None = None) -> str:
-    if category_title:
+@router.callback_query(F.data == "plans")
+async def cb_plans(callback: CallbackQuery, config: Config) -> None:
+    """«Купить подписку». Если ключ уже есть, а несколько подписок в панели
+    не разрешены, — ведём в продление (в том числе со старых кнопок в
+    истории чата): иначе клиент платил бы за второй ключ вместо продления."""
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        count = await subs.subscription_count(db, user)
+    if count and not config.allow_multiple_subscriptions:
+        await cb_renew(callback, config)
+        return
+    await _show_plans(callback, config)
+
+
+@router.callback_query(F.data == "plans_new")
+async def cb_plans_new(callback: CallbackQuery, config: Config) -> None:
+    """«Купить ещё одну» — отдельный новый ключ (если это разрешено)."""
+    if not config.allow_multiple_subscriptions:
+        await cb_renew(callback, config)
+        return
+    await _show_plans(callback, config)
+
+
+@router.callback_query(F.data == "renew")
+async def cb_renew(callback: CallbackQuery, config: Config) -> None:
+    """«Продлить подписку»: один ключ — сразу к тарифам его продления,
+    несколько — список ключей, у каждого своя кнопка «Продлить»."""
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        rows = await subs.list_subscriptions(db, user)
+        titles = await _plan_titles(db, rows)
+    if not rows:
+        await _show_plans(callback, config)
+    elif len(rows) == 1:
+        await _show_renew_plans(callback, config, rows[0].id)
+    else:
+        await screen(
+            callback.message,
+            config,
+            t(config, "{@key} <b>Какую подписку продлить?</b>"),
+            keyboards.subscriptions_menu(config, rows, titles),
+        )
+        await callback.answer()
+
+
+def _plans_header(
+    config: Config, discount: int, category_title: str | None = None, *, choose_category: bool = False
+) -> str:
+    if choose_category:
+        text = t(config, "{@card} <b>Выберите тариф</b>")
+    elif category_title:
         text = t(config, "{@card} <b>{title}</b>\n\nВыберите период подписки:", title=category_title)
     else:
         text = t(config, texts.PLANS_HEADER)
+    general = config.global_discount()
+    if general:
+        until = f" до {_date(config.discount_until)}" if config.discount_until else ""
+        text += f"\n\n🔥 Скидка <b>{general}%</b> на все тарифы{until}"
     if discount:
         text += f"\n\nСкидка по промокоду <b>{discount}%</b> уже учтена в ценах."
     return text
@@ -511,36 +591,41 @@ async def cb_plan_category(callback: CallbackQuery, config: Config) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def cb_buy(callback: CallbackQuery, config: Config) -> None:
-    plan = config.plan(int(callback.data.split(":", 1)[1]))
+async def _show_checkout(
+    callback: CallbackQuery, config: Config, plan_id: int, *, purpose: str, target_prefix: str
+) -> None:
+    async with session() as db:
+        user = await subs.get_or_create_user(db, callback.from_user.id)
+        plan = await pricing.find_plan(db, config, user, plan_id)
+        discount = config.plan_discount(plan, user.discount_percent) if plan else 0
     if plan is None:
         await callback.answer("Тариф больше не доступен", show_alert=True)
         return
-
     if not config.any_payment_ready:
-        await callback.answer(
-            "Приём оплаты ещё не настроен в панели", show_alert=True
-        )
+        await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
         return
-
-    async with session() as db:
-        discount = await _user_discount(db, callback.from_user.id)
 
     await screen(
         callback.message,
         config,
         _pay_header(config, plan, discount),
-        keyboards.providers_menu(config, purpose="plan", target=str(plan.id)),
+        keyboards.providers_menu(config, purpose=purpose, target=f"{target_prefix}{plan.id}"),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("buy:"))
+async def cb_buy(callback: CallbackQuery, config: Config) -> None:
+    await _show_checkout(
+        callback, config, int(callback.data.split(":", 1)[1]), purpose="plan", target_prefix=""
+    )
 
 
 def _pay_header(config: Config, plan: PlanView, discount: int) -> str:
     price = discounted_kopeks(plan.price_kopeks, discount)
     line = format_rub(price)
     if price != plan.price_kopeks:
-        line = f"{format_rub(price)} (скидка {discount}%, без скидки {format_rub(plan.price_kopeks)})"
+        line = f"<s>{format_rub(plan.price_kopeks)}</s> {format_rub(price)} (скидка {discount}%)"
     return t(
         config,
         "{@card} <b>{title}</b> — {price}\n{days}\n\nСпособ оплаты:",
@@ -670,12 +755,14 @@ async def _resolve_pay_target(
 
     if purpose == "renew":
         sub_id_str, _, plan_id_str = target.partition("-")
-        plan = config.plan(int(plan_id_str))
+        plan = await pricing.find_plan(db, config, user, int(plan_id_str))
         subscription = await own_subscription(sub_id_str)
         if plan is None or subscription is None:
             return EMPTY_TARGET
         return PayTarget(
-            amount_kopeks=discounted_kopeks(plan.price_kopeks, user.discount_percent),
+            amount_kopeks=discounted_kopeks(
+                plan.price_kopeks, config.plan_discount(plan, user.discount_percent)
+            ),
             description=f"Продление «{plan.full_title}»",
             plan=plan,
             subscription=subscription,
@@ -694,11 +781,24 @@ async def _resolve_pay_target(
             subscription=subscription,
         )
 
-    plan = config.plan(int(target))
+    plan = await pricing.find_plan(db, config, user, int(target))
     if plan is None:
         return EMPTY_TARGET
+    amount = discounted_kopeks(plan.price_kopeks, config.plan_discount(plan, user.discount_percent))
+    if not config.allow_multiple_subscriptions:
+        # Одна подписка на клиента: «покупка» при уже существующем ключе —
+        # это продление его, а не второй ключ. Проверка здесь, а не только
+        # в меню: кнопки старых сообщений в истории чата всё ещё нажимаются.
+        existing = await subs.renew_target(db, user)
+        if existing is not None:
+            return PayTarget(
+                amount_kopeks=amount,
+                description=f"Продление «{plan.full_title}»",
+                plan=plan,
+                subscription=existing,
+            )
     return PayTarget(
-        amount_kopeks=discounted_kopeks(plan.price_kopeks, user.discount_percent),
+        amount_kopeks=amount,
         description=f"Оплата тарифа «{plan.full_title}»",
         plan=plan,
     )
@@ -845,10 +945,17 @@ async def _pay_from_wallet(
         if pay.plan is not None:
             user.discount_percent = 0
         user_id = user.id
+        kind = (
+            "traffic"
+            if pay.package is not None
+            else ("renewal" if pay.subscription is not None else "purchase")
+        )
 
     await screen(callback.message, config, done, keyboards.back_to_menu(config))
     await callback.answer()
-    await payment_processor.after_purchase_effects(config, user_id, amount_kopeks, label)
+    await payment_processor.after_purchase_effects(
+        config, user_id, amount_kopeks, label, kind=kind, method="wallet"
+    )
 
 
 async def _pay_with_stars(
@@ -1279,7 +1386,7 @@ async def cb_connect(callback: CallbackQuery, config: Config) -> None:
         config,
         t(config, "{@link} <b>Подключение</b>")
         + f"\n\n<b>Ссылка подписки:</b>\n<code>{url}</code>\n\nВыберите устройство:",
-        connection.devices_keyboard(subscription_id, url, config.premium_emoji),
+        connection.devices_keyboard(subscription_id, url, _icons(config)),
     )
     await callback.answer()
 
@@ -1312,7 +1419,7 @@ async def cb_connect_apps(callback: CallbackQuery, config: Config) -> None:
         callback.message,
         config,
         f"<b>Приложения для {connection.APPS[device]['title']}</b>\n\nВыберите приложение:",
-        connection.apps_keyboard(int(raw_id), device, config.premium_emoji),
+        connection.apps_keyboard(int(raw_id), device, _icons(config)),
     )
     await callback.answer()
 
@@ -1337,7 +1444,7 @@ async def _render_instruction(
             device,
             app,
             url,
-            config.premium_emoji,
+            _icons(config),
             via_redirect=config.subscription_redirect,
         ),
         disable_web_page_preview=True,
@@ -1375,15 +1482,18 @@ async def cb_toggle_auto_renew(callback: CallbackQuery, config: Config) -> None:
 
 @router.callback_query(F.data.startswith("renewsub:"))
 async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None:
-    subscription_id = int(callback.data.split(":", 1)[1])
+    await _show_renew_plans(callback, config, int(callback.data.split(":", 1)[1]))
+
+
+async def _show_renew_plans(callback: CallbackQuery, config: Config, subscription_id: int) -> None:
     async with session() as db:
         subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
-        discount = await _user_discount(db, callback.from_user.id)
+        discount, personal = await _plans_context(db, config, callback.from_user.id)
     if subscription is None:
         await callback.answer("Ключ не найден", show_alert=True)
         return
 
-    if not config.plans:
+    if not config.plans and not personal:
         await screen(callback.message, config, t(config, texts.NO_PLANS), keyboards.back_to_menu(config))
         await callback.answer()
         return
@@ -1392,16 +1502,14 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
     back = f"viewsub:{subscription_id}"
     categories = keyboards.plan_categories(config)
     current_plan = config.plan(subscription.plan_id) if subscription.plan_id else None
-    if categories and current_plan is not None and any(
-        p.category_id == current_plan.category_id for p in config.plans
-    ):
+    if categories and current_plan is not None and not personal:
         # Продление — в рамках категории ключа: иначе продление тарифа «DE»
         # тарифом «VPN» молча переключило бы сквады, и клиент потерял бы
         # доступ к тому, за что платил.
         await screen(
             callback.message,
             config,
-            _plans_header(config, discount),
+            _plans_header(config, discount, current_plan.category_title),
             keyboards.plans_menu(
                 config,
                 prefix=prefix,
@@ -1414,15 +1522,19 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
         await screen(
             callback.message,
             config,
-            t(config, "{@card} <b>Выберите тариф</b>"),
-            keyboards.categories_menu(config, prefix=prefix, back=back, discount_percent=discount),
+            _plans_header(config, discount, choose_category=True),
+            keyboards.categories_menu(
+                config, prefix=prefix, back=back, discount_percent=discount, personal=personal
+            ),
         )
     else:
         await screen(
             callback.message,
             config,
             _plans_header(config, discount),
-            keyboards.plans_menu(config, prefix=prefix, discount_percent=discount, back=back),
+            keyboards.plans_menu(
+                config, prefix=prefix, discount_percent=discount, back=back, personal=personal
+            ),
         )
     await callback.answer()
 
@@ -1431,25 +1543,13 @@ async def cb_renew_subscription(callback: CallbackQuery, config: Config) -> None
 async def cb_renew_pick_plan(callback: CallbackQuery, config: Config) -> None:
     prefix, plan_id_str = callback.data.split(":", 1)
     subscription_id = int(prefix.removeprefix("renewbuy-"))
-    plan = config.plan(int(plan_id_str))
-    if plan is None:
-        await callback.answer("Тариф больше не доступен", show_alert=True)
-        return
-    if not config.any_payment_ready:
-        await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
-        return
-
-    async with session() as db:
-        discount = await _user_discount(db, callback.from_user.id)
-
-    target = f"{subscription_id}-{plan.id}"
-    await screen(
-        callback.message,
+    await _show_checkout(
+        callback,
         config,
-        _pay_header(config, plan, discount),
-        keyboards.providers_menu(config, purpose="renew", target=target),
+        int(plan_id_str),
+        purpose="renew",
+        target_prefix=f"{subscription_id}-",
     )
-    await callback.answer()
 
 
 async def _render_devices(callback: CallbackQuery, config: Config, subscription_id: int) -> None:
@@ -1537,18 +1637,24 @@ async def cb_profile(callback: CallbackQuery, config: Config) -> None:
         w = await wallet.get_or_create(db, user)
         balance = w.balance_kopeks
         discount = user.discount_percent or 0
+        has_subscription = bool(await subs.subscription_count(db, user))
 
     lines = [
         t(config, "{@user} <b>Личный кабинет</b>"),
         "",
         f"ID профиля: <code>{callback.from_user.id}</code>",
-        "",
-        t(config, "{@wallet} Доступно: <b>{amount}</b>", amount=format_rub(balance)),
     ]
+    if config.shows("balance"):
+        lines += ["", t(config, "{@wallet} Доступно: <b>{amount}</b>", amount=format_rub(balance))]
     if discount:
         lines.append(t(config, "{@gift} Скидка на следующую оплату: <b>{p}%</b>", p=discount))
     text = "\n".join(lines)
-    await screen(callback.message, config, text, keyboards.profile_menu(config))
+    await screen(
+        callback.message,
+        config,
+        text,
+        keyboards.profile_menu(config, has_subscription=has_subscription),
+    )
     await callback.answer()
 
 
@@ -1575,6 +1681,7 @@ _SOURCE_LABEL = {
     "rollypay": "СБП",
     "cryptobot": "криптовалюта",
     "manual": "выдано администратором",
+    "admin": "выдано администратором",
 }
 
 

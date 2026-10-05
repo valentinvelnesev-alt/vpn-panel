@@ -17,7 +17,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.config import Config, discounted_kopeks, format_rub
+from app.config import Config, PlanView, discounted_kopeks, format_rub
 from app.icons import icon_id, style_or_none
 
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
@@ -26,18 +26,33 @@ TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
 BTN_MENU = "Меню"
 BTN_HELP = "Помощь"
 
+# Кнопки, которые админ может скрыть в панели (Бот → Меню бота). Ключи
+# хранятся в BotConfig.menu_hidden; подписи продублированы в панели.
+MENU_BUTTONS: dict[str, str] = {
+    "trial": "Попробовать бесплатно",
+    "subscriptions": "Подписка",
+    "connect": "Подключиться",
+    "profile": "Личный кабинет",
+    "balance": "Баланс",
+    "referral": "Рефералка",
+    "promo": "Промокод",
+    "channel": "Наш канал",
+    "support": "Поддержка",
+    "help": "Помощь (кнопка под полем ввода)",
+    "history": "История покупок",
+}
 
-def reply_menu() -> ReplyKeyboardMarkup:
+
+def reply_menu(config: Config | None = None) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода: «Меню» и «Помощь».
 
     Иконок и цветов у неё быть не может — это возможности только у inline-
     кнопок; здесь Telegram рисует обычный текст.
     """
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=BTN_MENU), KeyboardButton(text=BTN_HELP)]],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+    row = [KeyboardButton(text=BTN_MENU)]
+    if config is None or config.shows("help"):
+        row.append(KeyboardButton(text=BTN_HELP))
+    return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True, is_persistent=True)
 
 
 def _btn(
@@ -54,7 +69,10 @@ def _btn(
         kwargs["callback_data"] = callback_data
     if url:
         kwargs["url"] = url
-    emoji = icon_id(icon, config.premium_emoji if config else None)
+    # Премиум-иконки на кнопках — только если в панели включён режим
+    # премиум-эмодзи: без Telegram Premium у владельца бота Telegram их
+    # не покажет, а в обычном режиме кнопки должны быть без них.
+    emoji = icon_id(icon, config.premium_emoji) if config is not None and config.premium else None
     if emoji:
         kwargs["icon_custom_emoji_id"] = emoji
     allowed = style_or_none(style)
@@ -76,40 +94,54 @@ def main_menu(
     balance_kopeks: int,
 ) -> InlineKeyboardMarkup:
     """Порядок как в исходном боте: покупка, подписки, подключение,
-    кабинет, баланс, рефералка, промокод, канал и поддержка."""
+    кабинет, баланс, рефералка, промокод, канал и поддержка.
+
+    Нет ни одного ключа — «Купить подписку». Есть — «Продлить подписку»:
+    раньше «Купить» при живой подписке заводил второй ключ вместо продления.
+    Отдельный новый ключ — «Купить ещё одну», если это разрешено в панели.
+    """
     rows: list[list[InlineKeyboardButton]] = []
-    if trial_available:
+    if trial_available and config.shows("trial"):
         rows.append(
             [_btn(config, "Попробовать бесплатно", callback_data="trial", icon="trial", style="success")]
         )
 
-    rows.append([_btn(config, "Купить подписку", callback_data="plans", icon="buy")])
     if has_subscription:
-        rows.append([_btn(config, "Подписка", callback_data="my_subscriptions", icon="subscription")])
+        rows.append([_btn(config, "Продлить подписку", callback_data="renew", icon="clock")])
+        if config.allow_multiple_subscriptions:
+            rows.append([_btn(config, "Купить ещё одну", callback_data="plans_new", icon="buy")])
+        if config.shows("subscriptions"):
+            rows.append([_btn(config, "Подписка", callback_data="my_subscriptions", icon="subscription")])
         # «Подключиться» без единого ключа вело бы в тупик — прячем.
-        rows.append([_btn(config, "Подключиться", callback_data="connect", icon="connect")])
+        if config.shows("connect"):
+            rows.append([_btn(config, "Подключиться", callback_data="connect", icon="connect")])
+    else:
+        rows.append([_btn(config, "Купить подписку", callback_data="plans", icon="buy")])
 
-    rows.append([_btn(config, "Личный кабинет", callback_data="profile", icon="profile")])
-    rows.append(
-        [
-            _btn(
-                config,
-                f"Баланс: {format_rub(balance_kopeks)}",
-                callback_data="wallet",
-                icon="balance",
-            )
-        ]
-    )
+    if config.shows("profile"):
+        rows.append([_btn(config, "Личный кабинет", callback_data="profile", icon="profile")])
+    if config.shows("balance"):
+        rows.append(
+            [
+                _btn(
+                    config,
+                    f"Баланс: {format_rub(balance_kopeks)}",
+                    callback_data="wallet",
+                    icon="balance",
+                )
+            ]
+        )
 
-    if config.referral_visible:
+    if config.referral_visible and config.shows("referral"):
         rows.append([_btn(config, "Рефералка", callback_data="referral", icon="referral", style="success")])
 
-    rows.append([_btn(config, "Промокод", callback_data="promo", icon="promo")])
+    if config.shows("promo"):
+        rows.append([_btn(config, "Промокод", callback_data="promo", icon="promo")])
 
     last: list[InlineKeyboardButton] = []
-    if config.channel_url:
+    if config.channel_url and config.shows("channel"):
         last.append(_btn(config, "Наш канал", url=config.channel_url, icon="channel"))
-    if config.support_url:
+    if config.support_url and config.shows("support"):
         last.append(_btn(config, "Поддержка", url=config.support_url, icon="support"))
     rows.append(last)
     return _markup(rows)
@@ -150,41 +182,61 @@ def plan_categories(config: Config) -> list[tuple[int | None, str]]:
 def category_from_price(config: Config, category_id: int | None, discount_percent: int) -> int:
     """Минимальная цена в категории — для подписи «от N ₽»."""
     prices = [
-        discounted_kopeks(p.price_kopeks, discount_percent)
+        discounted_kopeks(p.price_kopeks, config.plan_discount(p, discount_percent))
         for p in config.plans
         if p.category_id == category_id
     ]
     return min(prices) if prices else 0
 
 
+def _category_button(config: Config, category_id, title: str, prefix: str, discount: int):
+    cheapest = category_from_price(config, category_id, discount)
+    label = f"{title} • от {format_rub(cheapest)}" if cheapest else title
+    return _btn(
+        config,
+        label,
+        callback_data=f"plancat:{prefix}:{category_id if category_id is not None else 0}",
+        icon="plan",
+    )
+
+
 def categories_menu(
-    config: Config, *, prefix: str = "buy", back: str = "menu", discount_percent: int = 0
+    config: Config,
+    *,
+    prefix: str = "buy",
+    back: str = "menu",
+    discount_percent: int = 0,
+    personal: list[PlanView] | None = None,
 ) -> InlineKeyboardMarkup:
-    rows = []
+    """Экран выбора категории. Персональные тарифы клиента — сверху,
+    отдельно от вкладок: они не принадлежат ни одной категории."""
+    rows = [
+        [_plan_button(config, plan, prefix, discount_percent)] for plan in personal or []
+    ]
     for category_id, title in plan_categories(config):
-        cheapest = category_from_price(config, category_id, discount_percent)
-        label = f"{title} • от {format_rub(cheapest)}" if cheapest else title
-        rows.append(
-            [
-                _btn(
-                    config,
-                    label,
-                    callback_data=f"plancat:{prefix}:{category_id if category_id is not None else 0}",
-                    icon="plan",
-                )
-            ]
-        )
+        rows.append([_category_button(config, category_id, title, prefix, discount_percent)])
     rows.append([_btn(config, "Отмена", callback_data=back, icon="cancel", style="danger")])
     return _markup(rows)
 
 
 def plan_price_label(plan, discount_percent: int = 0) -> str:
-    """«399 ₽» или «299 ₽ (-25%)» — зачёркивание Telegram в кнопках не
-    рисует, поэтому показываем итоговую цену и процент."""
+    """«399 ₽» или «299 ₽ вместо 399 ₽». Зачёркивание Telegram в кнопках
+    не рисует (а комбинируемые символы выглядят криво), поэтому — словами."""
     price = discounted_kopeks(plan.price_kopeks, discount_percent)
     if price == plan.price_kopeks:
         return format_rub(price)
-    return f"{format_rub(price)} (-{discount_percent}%)"
+    return f"{format_rub(price)} вместо {format_rub(plan.price_kopeks)}"
+
+
+def _plan_button(config: Config, plan: PlanView, prefix: str, user_discount: int):
+    discount = config.plan_discount(plan, user_discount)
+    title = f"⭐ {plan.title}" if plan.is_personal else plan.title
+    return _btn(
+        config,
+        f"{title} • {plan_price_label(plan, discount)}",
+        callback_data=f"{prefix}:{plan.id}",
+        icon="star" if plan.is_personal else "period",
+    )
 
 
 def plans_menu(
@@ -195,25 +247,22 @@ def plans_menu(
     discount_percent: int = 0,
     back: str = "menu",
     with_promo: bool = True,
+    personal: list[PlanView] | None = None,
 ) -> InlineKeyboardMarkup:
     """category_id: -1 — без фильтра (все тарифы, старое поведение),
-    None — только тарифы без категории, иначе — тарифы этой категории."""
+    None — только тарифы без категории, иначе — тарифы этой категории.
+
+    discount_percent — скидка клиента по промокоду; общая скидка из панели
+    учитывается для каждого тарифа отдельно (см. Config.plan_discount)."""
     rows = []
+    if category_id == -1:
+        rows += [[_plan_button(config, plan, prefix, discount_percent)] for plan in personal or []]
     for plan in config.plans:
         if category_id != -1 and plan.category_id != category_id:
             continue
-        rows.append(
-            [
-                _btn(
-                    config,
-                    f"{plan.title} • {plan_price_label(plan, discount_percent)}",
-                    callback_data=f"{prefix}:{plan.id}",
-                    icon="period",
-                )
-            ]
-        )
+        rows.append([_plan_button(config, plan, prefix, discount_percent)])
 
-    if with_promo and not discount_percent:
+    if with_promo and not discount_percent and config.shows("promo"):
         rows.append(
             [_btn(config, "Применить промокод", callback_data="promo", icon="promo", style="primary")]
         )
@@ -355,12 +404,16 @@ def devices_menu(config: Config, has_devices: bool, *, subscription_id: int) -> 
 
 
 # ── Профиль и кошелёк ─────────────────────────────────────────────────
-def profile_menu(config: Config) -> InlineKeyboardMarkup:
-    rows = [
-        [_btn(config, "Пополнить баланс", callback_data="wallet_topup", icon="balance")],
-        [_btn(config, "Купить подписку", callback_data="plans", icon="buy")],
-        [_btn(config, "История покупок", callback_data="purchase_history", icon="history")],
-    ]
+def profile_menu(config: Config, *, has_subscription: bool = False) -> InlineKeyboardMarkup:
+    rows = []
+    if config.shows("balance"):
+        rows.append([_btn(config, "Пополнить баланс", callback_data="wallet_topup", icon="balance")])
+    if has_subscription:
+        rows.append([_btn(config, "Продлить подписку", callback_data="renew", icon="clock")])
+    else:
+        rows.append([_btn(config, "Купить подписку", callback_data="plans", icon="buy")])
+    if config.shows("history"):
+        rows.append([_btn(config, "История покупок", callback_data="purchase_history", icon="history")])
     legal = []
     if config.privacy_policy_url:
         legal.append(_btn(config, "Политика конфиденциальности", url=config.privacy_policy_url, icon="doc"))
@@ -403,7 +456,9 @@ def referral_menu(config: Config, link: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Скопировать ссылку",
                     copy_text=CopyTextButton(text=link),
-                    icon_custom_emoji_id=icon_id("copy", config.premium_emoji),
+                    icon_custom_emoji_id=(
+                        icon_id("copy", config.premium_emoji) if config.premium else None
+                    ),
                 )
             ],
             [

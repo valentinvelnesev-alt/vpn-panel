@@ -7,6 +7,8 @@ Telegram отвергает всё сообщение целиком, если �
 у клиента.
 """
 
+from dataclasses import replace
+
 from aiogram.types import InlineKeyboardMarkup
 
 from app import connection, keyboards
@@ -325,7 +327,7 @@ def test_topup_amounts_have_no_icons() -> None:
 def test_payment_methods_use_the_sbp_icon() -> None:
     from app.icons import ICONS
 
-    markup = keyboards.providers_menu(CONFIG, purpose="plan", target="1")
+    markup = keyboards.providers_menu(PREMIUM, purpose="plan", target="1")
     sbp = next(b for row in markup.inline_keyboard for b in row if "СБП" in b.text)
     assert sbp.icon_custom_emoji_id == ICONS["sbp"].emoji_id
 
@@ -377,7 +379,7 @@ def test_balance_uses_wallet_icon_not_a_card() -> None:
     balance = next(
         b
         for row in keyboards.main_menu(
-            CONFIG, trial_available=False, has_subscription=True, balance_kopeks=0
+            PREMIUM, trial_available=False, has_subscription=True, balance_kopeks=0
         ).inline_keyboard
         for b in row
         if b.text.startswith("Баланс:")
@@ -487,3 +489,19 @@ async def test_photo_file_id_is_reused() -> None:
 
     ui.reset_photo_cache(path)
     assert path not in ui._file_ids
+
+
+PREMIUM = replace(CONFIG, emoji_mode=EmojiMode.PREMIUM)
+
+
+def test_plain_mode_has_no_button_icons() -> None:
+    """Галочка «премиум-эмодзи» выключена — кнопки без иконок: без Premium у
+    владельца бота Telegram их всё равно не покажет."""
+    markup = keyboards.main_menu(
+        CONFIG, trial_available=True, has_subscription=True, balance_kopeks=0
+    )
+    assert all(b.icon_custom_emoji_id is None for row in markup.inline_keyboard for b in row)
+    premium = keyboards.main_menu(
+        PREMIUM, trial_available=True, has_subscription=True, balance_kopeks=0
+    )
+    assert any(b.icon_custom_emoji_id for row in premium.inline_keyboard for b in row)

@@ -237,7 +237,11 @@ async def test_user_summary_follows_latest_key(db, config, remote) -> None:
 # ── Скидка промокода ──────────────────────────────────────────────────
 def test_discounted_kopeks() -> None:
     assert discounted_kopeks(39900, 0) == 39900
-    assert discounted_kopeks(39900, 25) == 29925
+    # Круглая цена остаётся круглой: 399 ₽ −25% = 299 ₽, а не 299.25 ₽.
+    assert discounted_kopeks(39900, 25) == 29900
+    assert discounted_kopeks(19900, 15) == 16900
+    # Цена с копейками округляется до копейки, как раньше.
+    assert discounted_kopeks(39950, 25) == 29962
     assert discounted_kopeks(39900, 100) == 100  # не ниже 1 ₽
     assert discounted_kopeks(39900, 150) == 100
 

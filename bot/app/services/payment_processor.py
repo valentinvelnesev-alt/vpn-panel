@@ -17,6 +17,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
 from app import config as config_module
 from app import texts
 from app.config import Config
@@ -44,6 +46,8 @@ class Applied:
     text: str
     amount_kopeks: int
     plan_title: str | None  # None — пополнение баланса
+    kind: str = "purchase"
+    method: str | None = None
 
 
 async def handle(payment_id: int) -> None:
@@ -56,13 +60,23 @@ async def handle(payment_id: int) -> None:
 
     if applied.plan_title is not None:
         await after_purchase_effects(
-            applied.config, applied.user_id, applied.amount_kopeks, applied.plan_title
+            applied.config,
+            applied.user_id,
+            applied.amount_kopeks,
+            applied.plan_title,
+            kind=applied.kind,
+            method=applied.method,
         )
 
 
 async def _apply(payment_id: int) -> Applied | None:
     async with session() as db:
-        payment = await db.get(Payment, payment_id)
+        # FOR UPDATE: одну оплату одновременно применяют событие из шины,
+        # воркер догонки, опрос провайдера и кнопка «Проверить оплату». Без
+        # блокировки двое видели applied_at IS NULL и оба выдавали ключ.
+        payment = await db.scalar(
+            select(Payment).where(Payment.id == payment_id).with_for_update()
+        )
         if payment is None:
             log.warning("payment_completed для несуществующего платежа %s", payment_id)
             return None
@@ -106,6 +120,7 @@ async def _apply(payment_id: int) -> Applied | None:
                 gb=package.traffic_gb,
             )
             plan_title = f"+{package.traffic_gb} ГБ трафика"
+            kind = "traffic"
         elif payment.purpose == PaymentPurpose.TOPUP:
             await wallet.credit(
                 db,
@@ -121,11 +136,13 @@ async def _apply(payment_id: int) -> Applied | None:
                 amount=f"{payment.amount_kopeks / 100:.2f}",
             )
             plan_title = None
+            kind = "topup"
         else:
             plan = await config_module.load_plan(db, payment.plan_id)
             if plan is None:
                 log.error("У платежа %s не найден тариф %s", payment_id, payment.plan_id)
                 return None
+            subscription = None
             if payment.subscription_id is not None:
                 subscription = await db.get(BotSubscription, payment.subscription_id)
                 if subscription is None or subscription.user_id != user.id:
@@ -133,6 +150,12 @@ async def _apply(payment_id: int) -> Applied | None:
                         "У платежа %s не найден ключ %s", payment_id, payment.subscription_id
                     )
                     return None
+            elif not config.allow_multiple_subscriptions:
+                # Счёт выставлен до появления ключа или до смены настройки —
+                # всё равно продлеваем существующий, а не плодим второй.
+                subscription = await subs.renew_target(db, user)
+            kind = "renewal" if subscription is not None else "purchase"
+            if subscription is not None:
                 subscription = await subs.extend_subscription(
                     db, config, subscription, plan, amount_kopeks=payment.amount_kopeks
                 )
@@ -165,11 +188,19 @@ async def _apply(payment_id: int) -> Applied | None:
             text=text,
             amount_kopeks=payment.amount_kopeks,
             plan_title=plan_title,
+            kind=kind,
+            method=str(payment.provider),
         )
 
 
 async def after_purchase_effects(
-    config: Config, user_id: int, amount_kopeks: int, plan_title: str
+    config: Config,
+    user_id: int,
+    amount_kopeks: int,
+    plan_title: str,
+    *,
+    kind: str = "purchase",
+    method: str | None = None,
 ) -> None:
     """Реферальная комиссия, уведомление о продаже, бонусные дни рефереру.
     Каждый шаг в своей транзакции и со своим try/except: их сбой не должен
@@ -182,7 +213,7 @@ async def after_purchase_effects(
             if user is None:
                 return
             commissions = await subs.after_paid_purchase(
-                db, config, user, amount_kopeks, plan_title=plan_title
+                db, config, user, amount_kopeks, plan_title=plan_title, kind=kind, method=method
             )
             for referrer, share in commissions:
                 notices.append(

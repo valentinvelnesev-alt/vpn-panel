@@ -5,7 +5,9 @@ import Layout from '@/components/Layout'
 import { auth } from '@/lib/api'
 import Analytics from '@/pages/Analytics'
 import Bot from '@/pages/Bot'
+import { useBrand } from '@/lib/brand'
 import Broadcasts from '@/pages/Broadcasts'
+import Clients from '@/pages/Clients'
 import Dashboard from '@/pages/Dashboard'
 import Login from '@/pages/Login'
 import Nodes from '@/pages/Nodes'
@@ -22,6 +24,7 @@ const Soon = ({ title }: { title: string }) => (
 )
 
 export default function App() {
+  useBrand()
   const { data: admin, isPending } = useQuery({
     queryKey: ['me'],
     queryFn: auth.me,
@@ -59,6 +62,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="nodes" element={<Nodes />} />
           <Route path="users" element={<Users />} />
+          <Route path="clients" element={<Clients />} />
           <Route path="bot" element={<Bot />} />
           <Route path="broadcasts" element={<Broadcasts />} />
           <Route path="payments" element={<Payments />} />

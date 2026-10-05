@@ -31,6 +31,12 @@ class PlanView:
     traffic_limit_bytes: int
     category_id: int | None = None
     category_title: str | None = None
+    # Персональный тариф одного клиента (см. services/pricing.py).
+    owner_user_id: int | None = None
+
+    @property
+    def is_personal(self) -> bool:
+        return self.owner_user_id is not None
 
     @property
     def price_rub(self) -> float:
@@ -102,6 +108,7 @@ def plan_view(row: PlanRow) -> PlanView:
         traffic_limit_bytes=row.traffic_limit_bytes,
         category_id=row.category_id,
         category_title=row.category.title if row.category else None,
+        owner_user_id=row.owner_user_id,
     )
 
 
@@ -110,7 +117,11 @@ def discounted_kopeks(price_kopeks: int, discount_percent: int) -> int:
     percent = max(0, min(int(discount_percent or 0), 100))
     if percent == 0:
         return price_kopeks
-    return max(100, round(price_kopeks * (100 - percent) / 100))
+    price = price_kopeks * (100 - percent) / 100
+    # Круглая цена остаётся круглой: 199 ₽ −15% = 169 ₽, а не 169.15 ₽.
+    if price_kopeks % 100 == 0:
+        price = int(price // 100) * 100
+    return max(100, round(price))
 
 
 def format_rub(kopeks: int) -> str:
@@ -153,6 +164,16 @@ class Config:
 
     menu_photo: str | None = None
 
+    # Общая скидка на все обычные тарифы; discount_until пусто — бессрочно.
+    discount_percent: int = 0
+    discount_until: datetime | None = None
+    # False — у клиента одна подписка, «Купить» при наличии ключа продлевает
+    # его; True — «Купить ещё одну» заводит отдельный ключ.
+    allow_multiple_subscriptions: bool = False
+    # Кнопки, скрытые админом в панели (ключи — keyboards.MENU_BUTTONS).
+    menu_hidden: frozenset[str] = frozenset()
+
+    # Только общие тарифы: персональные читаются под конкретного клиента.
     plans: list[PlanView] = field(default_factory=list)
     traffic_packages: list[TrafficPackageView] = field(default_factory=list)
 
@@ -189,6 +210,37 @@ class Config:
     @property
     def can_run(self) -> bool:
         return bool(self.enabled and self.token)
+
+    def shows(self, button: str) -> bool:
+        """Не скрыта ли кнопка в панели (Бот → Меню бота)."""
+        return button not in self.menu_hidden
+
+    @property
+    def premium(self) -> bool:
+        from shared.db.models import EmojiMode
+
+        return self.emoji_mode is EmojiMode.PREMIUM
+
+    def global_discount(self, now: datetime | None = None) -> int:
+        """Действующая сейчас общая скидка, 0 — нет или закончилась."""
+        if self.discount_percent <= 0:
+            return 0
+        if self.discount_until is not None:
+            from datetime import UTC
+
+            until = self.discount_until
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=UTC)
+            if until <= (now or datetime.now(UTC)):
+                return 0
+        return min(self.discount_percent, 95)
+
+    def plan_discount(self, plan: "PlanView", user_discount: int = 0) -> int:
+        """Скидка на конкретный тариф: большая из общей (кроме персональных
+        тарифов — у них и так своя цена) и скидки клиента по промокоду.
+        Не суммируются: 10% по промокоду при акции 20% — это 20%, не 30%."""
+        general = 0 if plan.is_personal else self.global_discount()
+        return max(general, int(user_discount or 0))
 
     # Провайдер «готов», когда включён И заполнены реквизиты. Кнопка без
     # реквизитов вела в тупик «оплата сейчас недоступна».
@@ -234,7 +286,7 @@ async def load(db: AsyncSession) -> Config:
     plans = await db.scalars(
         select(PlanRow)
         .options(selectinload(PlanRow.category))
-        .where(PlanRow.is_active.is_(True))
+        .where(PlanRow.is_active.is_(True), PlanRow.owner_user_id.is_(None))
         .order_by(PlanRow.sort_order, PlanRow.days)
     )
 
@@ -295,6 +347,10 @@ async def load(db: AsyncSession) -> Config:
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
         menu_photo=row.menu_photo,
+        discount_percent=row.discount_percent or 0,
+        discount_until=row.discount_until,
+        allow_multiple_subscriptions=row.allow_multiple_subscriptions,
+        menu_hidden=frozenset(row.menu_hidden or []),
         plans=[plan_view(p) for p in plans],
         traffic_packages=[traffic_view(p) for p in packages],
         remnawave_url=raw.get("remnawave_url"),

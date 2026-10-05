@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # "localhost", который для серверов Telegram означает их же собственную
     # машину — фото просто не скачивалось бы.
     panel_public_url: str = ""
+    # Секретный путь панели: если задан, панель открывается только по
+    # адресу https://host/<путь> (дальше браузер помнит cookie), а на всё
+    # остальное сервер отвечает пустым 404 — сканеры не видят ни страницы
+    # входа, ни того, что здесь вообще есть панель. Пусто — выключено.
+    panel_secret_path: str = ""
 
     database_url: str
     redis_url: str = "redis://redis:6379/0"
@@ -30,6 +35,11 @@ class Settings(BaseSettings):
     encryption_key: str
     access_token_ttl_minutes: int = 60
     refresh_token_ttl_days: int = 14
+
+    # Защита от перебора пароля: столько неудачных входов с одного IP за
+    # окно — и дальше 429 до конца окна.
+    login_max_failures: int = 10
+    login_window_minutes: int = 15
 
     tz: str = "Europe/Moscow"
     log_level: str = "INFO"
@@ -40,6 +50,10 @@ class Settings(BaseSettings):
         default="/app/shared/openapi/remnawave-2.8.1.json",
         description="Спека Remnawave, по которой сгенерирован клиент.",
     )
+
+    @property
+    def secret_path(self) -> str:
+        return self.panel_secret_path.strip().strip("/")
 
     @property
     def https_enabled(self) -> bool:

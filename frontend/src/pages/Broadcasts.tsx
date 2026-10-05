@@ -19,6 +19,16 @@ const STATUS_LABEL: Record<BroadcastRow['status'], string> = {
   cancelled: 'отменена',
 }
 
+const MAX_CAPTION = 1024
+const MAX_TEXT = 4096
+
+/** Длина так, как её считает Telegram: без HTML-тегов. */
+function visibleLength(text: string): number {
+  const el = document.createElement('textarea')
+  el.innerHTML = text.replace(/<[^>]+>/g, '')
+  return el.value.length
+}
+
 function useBroadcastProgress(broadcast: BroadcastRow) {
   const [live, setLive] = useState(broadcast)
   const wsRef = useRef<WebSocket | null>(null)
@@ -140,6 +150,19 @@ export default function Broadcasts() {
     },
   })
 
+  const testSend = useMutation({
+    mutationFn: () =>
+      panel.testBroadcast({
+        text,
+        photo_url: photoUrl,
+        buttons: buttons.filter((b) => b.text && b.url),
+      }),
+  })
+
+  const length = visibleLength(text)
+  const limit = photoUrl ? MAX_CAPTION : MAX_TEXT
+  const tooLong = length > limit
+
   const cancel = useMutation({
     mutationFn: (id: number) => panel.cancelBroadcast(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['broadcasts'] }),
@@ -166,6 +189,10 @@ export default function Broadcasts() {
               placeholder="Поддерживается HTML-разметка Telegram: <b>, <i>, <a>…"
               required
             />
+            <span className={`block text-right text-xs ${tooLong ? 'text-danger' : 'text-muted'}`}>
+              {length} / {limit}
+              {photoUrl && ' — с фото текст уходит подписью к нему, одним сообщением'}
+            </span>
           </Field>
 
           <div>
@@ -301,10 +328,30 @@ export default function Broadcasts() {
             <p className="text-sm text-danger">{(create.error as Error).message}</p>
           )}
 
-          <Button type="submit" disabled={create.isPending || !text}>
-            <Send className="size-4" />
-            {scheduleLater ? 'Запланировать' : 'Отправить сейчас'}
-          </Button>
+          {testSend.data && (
+            <p className={`text-sm ${testSend.data.ok ? 'text-success' : 'text-danger'}`}>
+              {testSend.data.message}
+            </p>
+          )}
+          {testSend.isError && (
+            <p className="text-sm text-danger">{(testSend.error as Error).message}</p>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={create.isPending || !text || tooLong}>
+              <Send className="size-4" />
+              {scheduleLater ? 'Запланировать' : 'Отправить сейчас'}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => testSend.mutate()}
+              disabled={testSend.isPending || !text || tooLong}
+              title="Придёт администраторам бота (Бот → Администраторы бота)"
+            >
+              {testSend.isPending ? 'Отправляю…' : 'Отправить тест себе'}
+            </Button>
+          </div>
         </form>
       </Card>
 
