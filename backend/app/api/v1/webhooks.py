@@ -31,7 +31,10 @@ async def _mark_paid(db: DbSession, payment: Payment) -> None:
         return  # уже обработан — провайдеры повторяют колбэки
     payment.status = PaymentStatus.PAID
     payment.paid_at = datetime.now(UTC)
-    await db.flush()
+    # Коммит ДО события: бот читает платёж в своей сессии и, не увидев
+    # статуса paid, пропускал событие — подписка выдавалась только через
+    # минуту воркером догонки.
+    await db.commit()
     await bus.publish(bus.EVENT_PAYMENT_COMPLETED, payment_id=payment.id)
 
 

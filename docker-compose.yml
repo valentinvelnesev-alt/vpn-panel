@@ -60,6 +60,10 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       panel-api: {condition: service_healthy}
+    volumes:
+      # Фото рассылок бот отправляет файлом с диска, а не ссылкой, —
+      # Telegram не всегда может скачать его с сервера панели.
+      - uploads:/app/uploads:ro
 
   caddy:
     <<: *common

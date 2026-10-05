@@ -42,7 +42,7 @@ trap 'err "Обновление прервано на строке $LINENO: $BAS
 
 inf "
 ╭──────────────────────────────────────╮
-│         VPN Panel · обновление       │
+│          Обновление панели           │
 ╰──────────────────────────────────────╯"
 
 # ── 1. Бэкап .env ─────────────────────────────────────────────────────
@@ -59,7 +59,13 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${DEPLOY_MODE}.y
 
 DB_BACKUP="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S).sql"
 inf "  Создаю дамп базы данных…"
-if $COMPOSE exec -T postgres pg_dump -U postgres vpn_panel < /dev/null > "$DB_BACKUP" 2>/dev/null; then
+# Пользователь и база — из .env (по умолчанию vpnpanel/vpnpanel). Раньше
+# здесь были захардкожены postgres/vpn_panel, которых нет, — дамп падал
+# всегда, и обновление шло вообще без бэкапа базы.
+PG_USER=$(get POSTGRES_USER); PG_USER=${PG_USER:-vpnpanel}
+PG_DB=$(get POSTGRES_DB); PG_DB=${PG_DB:-vpnpanel}
+if $COMPOSE exec -T postgres pg_dump -U "$PG_USER" "$PG_DB" < /dev/null > "$DB_BACKUP" 2>/dev/null \
+    && [ -s "$DB_BACKUP" ]; then
     ok "Бэкап БД → $DB_BACKUP"
 else
     c '1;33' "  ⚠ Не удалось создать дамп БД (контейнер не запущен?), продолжаю без него"
@@ -114,6 +120,10 @@ inf "  Обновляю образы и перезапускаю контейн�
 $COMPOSE pull postgres redis caddy 2>/dev/null || true
 $COMPOSE build panel-api bot panel-web
 $COMPOSE up -d --remove-orphans
+# Caddy монтирует конфиг из репозитория отдельным файлом; git reset
+# подменяет файл новым, а контейнер продолжает видеть старый, пока его не
+# пересоздать. Без этого изменения Caddyfile не применялись бы.
+$COMPOSE up -d --force-recreate --no-deps caddy
 
 # panel-web — одноразовый контейнер (restart: no): собирает SPA и
 # завершается. Docker Compose иногда решает, что раз он уже "Exited (0)",
@@ -137,6 +147,16 @@ if $COMPOSE exec -T panel-api alembic upgrade head < /dev/null; then
 else
     c '1;33' "  ⚠ Не удалось применить миграции автоматически — выполните вручную:"
     echo "      docker compose exec panel-api alembic upgrade head"
+fi
+
+# ── 4.6 Секретный путь панели ─────────────────────────────────────────
+if [ -z "$(get PANEL_SECRET_PATH)" ]; then
+    c '1;33' "
+  ⚠ Панель открывается по адресу сервера без секретного пути — любой
+    сканер видит страницу входа. Включить (ссылка изменится!):
+      sed -i '/^PANEL_SECRET_PATH=/d' .env && echo \"PANEL_SECRET_PATH=\$(openssl rand -hex 6)\" >> .env
+      $COMPOSE up -d --force-recreate panel-api caddy
+      grep PANEL_SECRET_PATH .env   # панель: <адрес>/<этот путь>"
 fi
 
 # ── 5. Готово ─────────────────────────────────────────────────────────

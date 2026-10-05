@@ -14,17 +14,29 @@
 		file_server
 	}
 
-	# SPA: статика, всё остальное — на index.html (клиентский роутинг)
+	# SPA: статика, всё остальное — на index.html (клиентский роутинг).
+	# forward_auth — секретный путь панели (PANEL_SECRET_PATH): без cookie-
+	# пропуска бэкенд отвечает пустым 404, и наружу не видно даже страницы
+	# входа. Путь не задан — бэкенд всегда пропускает (204).
+	# route — чтобы директивы шли строго по порядку: по умолчанию Caddy
+	# выполняет try_files раньше forward_auth, и бэкенд видел бы уже
+	# переписанный /index.html вместо секретного адреса.
 	handle {
-		root * /srv
-		try_files {path} /index.html
-		file_server
+		route {
+			forward_auth panel-api:8000 {
+				uri /api/v1/gate
+			}
+			root * /srv
+			try_files {path} /index.html
+			file_server
+		}
 	}
 
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
-		Referrer-Policy same-origin
+		Referrer-Policy no-referrer
+		X-Robots-Tag "noindex, nofollow"
 		-Server
 	}
 }

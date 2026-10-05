@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
 from app.core.config import settings
+from app.core.gate import GateMiddleware
 
 logging.basicConfig(
     level=settings.log_level,
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="VPN Panel API",
+    title="Panel API",
     version="0.1.0",
     lifespan=lifespan,
     # Схему наружу не отдаём — панель ставят на публичный адрес.
@@ -45,5 +46,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(GateMiddleware)
 
 app.include_router(api_router)

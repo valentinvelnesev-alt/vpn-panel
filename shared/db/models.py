@@ -226,6 +226,24 @@ class BotConfig(Base, TimestampMixin):
     )
     node_alerts_chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
 
+    # Общая скидка на все обычные тарифы (персональные не трогает — у них
+    # и так своя цена). discount_until пусто — скидка бессрочная.
+    discount_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    discount_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+    # False — у клиента одна подписка: «Купить» при уже купленной подписке
+    # продлевает её, а не заводит второй ключ. True — как раньше, каждая
+    # покупка через «Купить ещё одну» создаёт отдельный ключ.
+    allow_multiple_subscriptions: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
+    # Кнопки главного меню, которые админ скрыл в панели (см. MENU_BUTTONS
+    # в bot/app/keyboards.py): "support", "promo", "profile", ...
+    menu_hidden: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
 
 class PlanCategory(Base, TimestampMixin):
     """Категория тарифов (например «VPN», «VPN + LTE») — заводится в панели.
@@ -273,6 +291,21 @@ class Plan(Base, TimestampMixin):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Персональный тариф: виден в боте только этому пользователю, общая
+    # скидка на него не действует. NULL — обычный тариф для всех.
+    # use_alter: bot_users и bot_plans ссылаются друг на друга
+    # (auto_renew_plan_id), без него create_all не может упорядочить таблицы.
+    owner_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "bot_users.id",
+            ondelete="CASCADE",
+            use_alter=True,
+            name="fk_bot_plans_owner_user_id",
+        ),
+        default=None,
+        index=True,
+    )
 
     @property
     def price_rub(self) -> float:
@@ -322,6 +355,11 @@ class BotUser(Base, TimestampMixin):
     referral_reward_paid: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # Скидка из активированного промокода — действует на следующую оплату
+    # тарифа и обнуляется после неё.
+    pending_discount_percent: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
 
     auto_renew_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -332,7 +370,13 @@ class BotUser(Base, TimestampMixin):
     # Какую подписку продлевать автоплатежом. NULL — «основную» (первую
     # выданную), см. BotSubscription.
     auto_renew_subscription_id: Mapped[int | None] = mapped_column(
-        ForeignKey("bot_subscriptions.id", ondelete="SET NULL"), default=None
+        ForeignKey(
+            "bot_subscriptions.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_bot_users_auto_renew_subscription_id",
+        ),
+        default=None,
     )
 
     purchases: Mapped[list["Purchase"]] = relationship(

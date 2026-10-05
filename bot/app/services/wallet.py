@@ -14,8 +14,13 @@ class InsufficientFunds(Exception):
     pass
 
 
-async def get_or_create(db: AsyncSession, user: BotUser) -> Wallet:
-    wallet = await db.scalar(select(Wallet).where(Wallet.user_id == user.id))
+async def get_or_create(db: AsyncSession, user: BotUser, *, lock: bool = False) -> Wallet:
+    query = select(Wallet).where(Wallet.user_id == user.id)
+    if lock:
+        # Списание при двух быстрых нажатиях «Из баланса»: без блокировки
+        # оба запроса видели старый баланс и уводили его в минус.
+        query = query.with_for_update()
+    wallet = await db.scalar(query)
     if wallet is None:
         wallet = Wallet(user_id=user.id, balance_kopeks=0)
         db.add(wallet)
@@ -32,7 +37,7 @@ async def credit(
 ) -> Wallet:
     if amount_kopeks <= 0:
         raise ValueError("сумма пополнения должна быть положительной")
-    wallet = await get_or_create(db, user)
+    wallet = await get_or_create(db, user, lock=True)
     wallet.balance_kopeks += amount_kopeks
     db.add(
         WalletTransaction(
@@ -54,7 +59,7 @@ async def debit(
 ) -> Wallet:
     if amount_kopeks <= 0:
         raise ValueError("сумма списания должна быть положительной")
-    wallet = await get_or_create(db, user)
+    wallet = await get_or_create(db, user, lock=True)
     if wallet.balance_kopeks < amount_kopeks:
         raise InsufficientFunds(
             f"на балансе {wallet.balance_kopeks / 100:.2f} ₽, "

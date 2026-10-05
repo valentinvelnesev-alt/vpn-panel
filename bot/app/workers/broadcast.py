@@ -9,12 +9,19 @@
 
 import asyncio
 import logging
+import os
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
+from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
@@ -26,6 +33,28 @@ log = logging.getLogger("bot.workers.broadcast")
 
 CHECK_INTERVAL = 10
 SEND_DELAY = 0.05  # ~20 сообщений в секунду — с запасом от лимитов Telegram
+MAX_RETRIES = 3
+# Тот же том, куда панель сохраняет загруженные фото (docker-compose: uploads).
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/app/uploads")
+
+# Будит воркер сразу после создания рассылки в панели — вместо того чтобы
+# отправлять её прямо в цикле приёма команд (это блокировало шину: пока шла
+# рассылка, бот не реагировал ни на «Остановить», ни на оплаты).
+wakeup = asyncio.Event()
+
+
+def _local_photo(photo_url: str) -> str | None:
+    """Путь к фото на диске, если оно загружено через панель.
+
+    Отправляем файл напрямую, а не ссылкой: по ссылке его должны скачать
+    серверы Telegram, а панель часто закрыта файрволом или работает по
+    IP без HTTPS — тогда фото молча не отправлялось никому."""
+    path = urlparse(photo_url).path
+    if not path.startswith("/uploads/"):
+        return None
+    name = os.path.basename(path)
+    full = os.path.join(UPLOAD_DIR, name)
+    return full if name and os.path.isfile(full) else None
 
 
 def _keyboard(buttons: list[dict]):
@@ -38,13 +67,16 @@ def _keyboard(buttons: list[dict]):
         if text and url:
             builder.button(text=text, url=url)
     builder.adjust(1)
-    return builder.as_markup() if buttons else None
+    markup = builder.as_markup()
+    return markup if markup.inline_keyboard else None
 
 
 async def _claim_due_broadcast() -> int | None:
     """Берёт в работу одну наступившую рассылку, помечая её как sending."""
     now = datetime.now(UTC)
     async with session() as db:
+        # SKIP LOCKED: воркер и пробуждение из шины не должны схватить одну
+        # и ту же рассылку — иначе клиенты получали бы её дважды.
         row = await db.scalar(
             select(Broadcast)
             .where(
@@ -53,6 +85,7 @@ async def _claim_due_broadcast() -> int | None:
             )
             .order_by(Broadcast.scheduled_at)
             .limit(1)
+            .with_for_update(skip_locked=True)
         )
         if row is None:
             return None
@@ -77,32 +110,45 @@ async def _send(broadcast_id: int, token: str) -> None:
         photo_url = broadcast.photo_url
 
     bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    # Файл заливается в Telegram один раз, дальше шлём его file_id — так
+    # рассылка с фото не грузит одну и ту же картинку тысячи раз.
+    photo = None
+    if photo_url:
+        local = _local_photo(photo_url)
+        photo = FSInputFile(local) if local else photo_url
     try:
         for user in recipients:
-            try:
-                if photo_url:
-                    await bot.send_photo(
-                        user.telegram_id,
-                        photo_url,
-                        caption=text,
-                        reply_markup=keyboard,
-                    )
-                else:
-                    await bot.send_message(user.telegram_id, text, reply_markup=keyboard)
-                ok = True
-            except TelegramForbiddenError:
-                ok = False
-                async with SessionLocal() as db:
-                    blocked_user = await db.get(BotUser, user.id)
-                    if blocked_user is not None:
-                        blocked_user.has_stopped_bot = True
-                        await db.commit()
-            except TelegramRetryAfter as exc:
-                await asyncio.sleep(exc.retry_after)
-                ok = False
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Не удалось отправить %s: %s", user.telegram_id, exc)
-                ok = False
+            ok = False
+            for _attempt in range(MAX_RETRIES):
+                try:
+                    if photo is not None:
+                        sent = await bot.send_photo(
+                            user.telegram_id,
+                            photo,
+                            caption=text,
+                            reply_markup=keyboard,
+                        )
+                        if isinstance(photo, FSInputFile) and sent.photo:
+                            photo = sent.photo[-1].file_id
+                    else:
+                        await bot.send_message(user.telegram_id, text, reply_markup=keyboard)
+                    ok = True
+                except TelegramRetryAfter as exc:
+                    # Лимит Telegram — ждём и пробуем ЭТОГО ЖЕ получателя снова,
+                    # раньше он просто записывался в «не доставлено».
+                    await asyncio.sleep(exc.retry_after + 1)
+                    continue
+                except TelegramForbiddenError:
+                    async with SessionLocal() as db:
+                        blocked_user = await db.get(BotUser, user.id)
+                        if blocked_user is not None:
+                            blocked_user.has_stopped_bot = True
+                            await db.commit()
+                except TelegramBadRequest as exc:
+                    log.warning("Telegram отклонил рассылку для %s: %s", user.telegram_id, exc)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Не удалось отправить %s: %s", user.telegram_id, exc)
+                break
 
             async with SessionLocal() as db:
                 broadcast = await db.get(Broadcast, broadcast_id)
@@ -142,6 +188,7 @@ async def run_once(token: str | None) -> bool:
 
 async def worker(token: str) -> None:
     while True:
+        wakeup.clear()
         try:
             # Догоняем все наступившие рассылки за проход, не только одну.
             while await run_once(token):
@@ -150,4 +197,7 @@ async def worker(token: str) -> None:
             raise
         except Exception:  # noqa: BLE001
             log.exception("Сбой в воркере рассылок")
-        await asyncio.sleep(CHECK_INTERVAL)
+        try:
+            await asyncio.wait_for(wakeup.wait(), timeout=CHECK_INTERVAL)
+        except TimeoutError:
+            pass

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import CurrentAdmin, DbSession
+from app.core import totp
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
@@ -14,6 +15,7 @@ from app.core.security import (
     needs_rehash,
     verify_password,
 )
+from app.services import cache
 from shared.db.models import Admin, AuditLog, RefreshToken
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -83,10 +85,52 @@ async def _issue_session(
     _set_auth_cookies(response, create_access_token(admin.id), token)
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+async def _failures(ip: str) -> int:
+    """Счётчик неудачных входов с IP. Redis недоступен — не ограничиваем:
+    лучше пустить админа, чем запереть его из-за упавшего кэша."""
+    try:
+        value = await cache.get_redis().get(f"login:fail:{ip}")
+    except Exception:  # noqa: BLE001
+        return 0
+    return int(value or 0)
+
+
+async def _register_failure(ip: str) -> None:
+    key = f"login:fail:{ip}"
+    try:
+        redis = cache.get_redis()
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, settings.login_window_minutes * 60)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _reset_failures(ip: str) -> None:
+    try:
+        await cache.get_redis().delete(f"login:fail:{ip}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/login", response_model=AdminOut)
 async def login(
     data: LoginRequest, request: Request, response: Response, db: DbSession
 ) -> Admin:
+    ip = _client_ip(request)
+    if await _failures(ip) >= settings.login_max_failures:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Слишком много неудачных попыток входа. "
+                f"Попробуйте через {settings.login_window_minutes} минут."
+            ),
+        )
+
     admin = await db.scalar(select(Admin).where(Admin.login == data.login))
 
     # Проверяем пароль даже для несуществующего логина — иначе разница во
@@ -95,6 +139,7 @@ async def login(
     password_ok = verify_password(data.password, stored_hash)
 
     if not admin or not password_ok or not admin.is_active:
+        await _register_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный логин или пароль",
@@ -104,6 +149,10 @@ async def login(
         from app.core.totp import verify_totp
 
         if not data.totp_code or not verify_totp(admin.totp_secret or "", data.totp_code):
+            if data.totp_code:
+                # Пустой код — это первый шаг формы (сервер просит 2FA), а
+                # не попытка подбора; считаем только реально неверные коды.
+                await _register_failure(ip)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Неверный код двухфакторной аутентификации",
@@ -112,6 +161,7 @@ async def login(
     if needs_rehash(admin.password_hash):
         admin.password_hash = hash_password(data.password)
 
+    await _reset_failures(ip)
     admin.last_login_at = datetime.now(UTC)
     await _issue_session(db, admin, request, response)
     db.add(
@@ -167,3 +217,96 @@ async def logout(request: Request, response: Response, db: DbSession) -> None:
 @router.get("/me", response_model=AdminOut)
 async def me(admin: CurrentAdmin) -> Admin:
     return admin
+
+
+# ── Двухфакторная аутентификация (TOTP) ───────────────────────────────
+class TotpSetupOut(BaseModel):
+    secret: str
+    otpauth_uri: str
+    qr_svg: str | None
+
+
+class TotpCodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class TotpDisableIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    code: str = Field(min_length=6, max_length=6)
+
+
+def _qr_svg(data: str) -> str | None:
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:
+        return None
+    image = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage, box_size=8)
+    return image.to_string(encoding="unicode")
+
+
+@router.post("/totp/setup", response_model=TotpSetupOut)
+async def totp_setup(admin: CurrentAdmin, db: DbSession) -> TotpSetupOut:
+    """Выдаёт новый секрет. 2FA включится только после ввода кода из
+    приложения (/totp/enable) — так нельзя запереть себя опечаткой."""
+    if admin.totp_enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "2FA уже включена")
+    admin.totp_secret = totp.generate_secret()
+    uri = totp.provisioning_uri(admin.totp_secret, admin.login)
+    return TotpSetupOut(secret=admin.totp_secret, otpauth_uri=uri, qr_svg=_qr_svg(uri))
+
+
+@router.post("/totp/enable", response_model=AdminOut)
+async def totp_enable(
+    data: TotpCodeIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> Admin:
+    if admin.totp_enabled:
+        return admin
+    if not admin.totp_secret or not totp.verify_totp(admin.totp_secret, data.code):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Неверный код — попробуйте ещё раз")
+    admin.totp_enabled = True
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="totp.enable",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return admin
+
+
+@router.post("/totp/disable", response_model=AdminOut)
+async def totp_disable(
+    data: TotpDisableIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> Admin:
+    if not verify_password(data.password, admin.password_hash) or not totp.verify_totp(
+        admin.totp_secret or "", data.code
+    ):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Неверный пароль или код")
+    admin.totp_enabled = False
+    admin.totp_secret = None
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="totp.disable",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return admin
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(admin: CurrentAdmin, response: Response, db: DbSession) -> None:
+    """Завершает все сессии этого администратора на всех устройствах."""
+    now = datetime.now(UTC)
+    tokens = await db.scalars(
+        select(RefreshToken).where(
+            RefreshToken.admin_id == admin.id, RefreshToken.revoked_at.is_(None)
+        )
+    )
+    for token in tokens:
+        token.revoked_at = now
+    response.delete_cookie(ACCESS_COOKIE, path="/")
+    response.delete_cookie(REFRESH_COOKIE, path="/")

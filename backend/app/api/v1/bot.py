@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 
 from app.api.deps import CurrentAdmin, DbSession
@@ -69,6 +69,11 @@ class BotStatusOut(BaseModel):
     privacy_policy_url: str | None
     terms_url: str | None
 
+    allow_multiple_subscriptions: bool
+    menu_hidden: list[str]
+    discount_percent: int
+    discount_until: datetime | None
+
 
 def _status(row: BotConfig) -> BotStatusOut:
     token = decrypt(row.token_encrypted) if row.token_encrypted else None
@@ -99,6 +104,10 @@ def _status(row: BotConfig) -> BotStatusOut:
         admin_telegram_ids=list(row.admin_telegram_ids or []),
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
+        allow_multiple_subscriptions=row.allow_multiple_subscriptions,
+        menu_hidden=list(row.menu_hidden or []),
+        discount_percent=row.discount_percent or 0,
+        discount_until=row.discount_until,
     )
 
 
@@ -226,6 +235,22 @@ class BotSettingsIn(BaseModel):
     privacy_policy_url: str | None = Field(default=None, max_length=512)
     terms_url: str | None = Field(default=None, max_length=512)
 
+    # Несколько ключей на клиента («Купить ещё одну») или одна подписка,
+    # которую «Купить» продлевает.
+    allow_multiple_subscriptions: bool = False
+    # Скрытые кнопки меню — ключи из MENU_BUTTONS (bot/app/keyboards.py).
+    menu_hidden: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator(
+        "support_url", "channel_url", "channel_id", "welcome_text",
+        "privacy_policy_url", "terms_url",
+    )
+    @classmethod
+    def _blank_to_none(cls, value: str | None) -> str | None:
+        # Пустое поле в форме = «не задано»: иначе бот рисовал кнопку с
+        # пустой ссылкой и Telegram отклонял всё меню целиком.
+        return value.strip() or None if value is not None else None
+
 
 @router.put("/settings", response_model=BotStatusOut)
 async def save_settings(
@@ -234,6 +259,7 @@ async def save_settings(
     row = await _config(db)
     for field, value in data.model_dump().items():
         setattr(row, field, value)
+    row.purchase_notify_chat_id = data.purchase_notify_chat_id or None
     _audit(db, admin, "bot.settings", request)
     await db.flush()
     await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
@@ -432,7 +458,10 @@ async def delete_plan_category(
 
 @router.get("/plans", response_model=list[PlanOut])
 async def list_plans(admin: CurrentAdmin, db: DbSession) -> list[PlanOut]:
-    plans = await db.scalars(select(Plan).order_by(Plan.sort_order, Plan.days))
+    # Персональные тарифы живут в карточке клиента (Клиенты бота).
+    plans = await db.scalars(
+        select(Plan).where(Plan.owner_user_id.is_(None)).order_by(Plan.sort_order, Plan.days)
+    )
     return [_plan_out(p) for p in plans]
 
 
@@ -534,3 +563,64 @@ async def save_node_alerts(
     await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
     await bus.publish(bus.CMD_RELOAD)
     return _status(row)
+
+
+# ── Общая скидка ──────────────────────────────────────────────────────
+class DiscountIn(BaseModel):
+    percent: int = Field(ge=0, le=95)
+    # Пусто — бессрочно, до ручного отключения.
+    until: datetime | None = None
+
+
+@router.put("/discount", response_model=BotStatusOut)
+async def save_discount(
+    data: DiscountIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> BotStatusOut:
+    if data.until is not None:
+        until = data.until if data.until.tzinfo else data.until.replace(tzinfo=UTC)
+        if data.percent and until <= datetime.now(UTC):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Дата окончания скидки уже прошла"
+            )
+    row = await _config(db)
+    row.discount_percent = data.percent
+    row.discount_until = data.until if data.percent else None
+    _audit(db, admin, "bot.discount", request, percent=data.percent)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+    return _status(row)
+
+
+# ── Чат уведомлений о продажах ────────────────────────────────────────
+class NotifyChatIn(BaseModel):
+    # -1001234567890 или @publicgroup — публичное имя переводим в id.
+    chat: str = Field(min_length=1, max_length=64)
+
+
+class NotifyChatOut(BaseModel):
+    ok: bool
+    message: str
+    chat_id: int | None = None
+
+
+@router.post("/notify-chat/test", response_model=NotifyChatOut)
+async def test_notify_chat(
+    data: NotifyChatIn, admin: CurrentAdmin, db: DbSession
+) -> NotifyChatOut:
+    """Шлёт в чат проверочное сообщение и объясняет ошибку Telegram.
+
+    Уведомления о продажах уходят молча: если бот не в группе или id указан
+    без «-100», админ раньше просто ничего не получал и не понимал почему.
+    """
+    row = await _config(db)
+    if not row.token_encrypted:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Сначала укажите токен бота")
+    token = decrypt(row.token_encrypted)
+    try:
+        chat_id = await telegram.send_test_to_chat(token, data.chat.strip())
+    except TelegramError as exc:
+        return NotifyChatOut(ok=False, message=telegram.explain_chat_error(str(exc)))
+    return NotifyChatOut(
+        ok=True, message="Тестовое сообщение отправлено — проверьте чат", chat_id=chat_id
+    )

@@ -14,7 +14,8 @@ from sqlalchemy import select
 
 from app import config as config_module
 from app import texts
-from app.services import subscriptions as subs, wallet
+from app.services import pricing, wallet
+from app.services import subscriptions as subs
 from app.services.notify import send
 from shared.db.models import BotUser, Plan, WalletTxType
 from shared.db.session import session
@@ -35,14 +36,14 @@ async def run_once() -> int:
         if not config.token:
             return 0
 
-        candidates = await db.scalars(
+        candidates = (await db.scalars(
             select(BotUser).where(
                 BotUser.auto_renew_enabled.is_(True),
                 BotUser.auto_renew_plan_id.is_not(None),
                 BotUser.expire_at.is_not(None),
                 BotUser.expire_at <= horizon,
             )
-        )
+        )).all()
 
         for user in candidates:
             expire_at = user.expire_at
@@ -55,20 +56,42 @@ async def run_once() -> int:
             if plan_row is None or not plan_row.is_active:
                 continue
             plan = config_module.plan_view(plan_row)
+            amount = pricing.price_for(config, plan, None).final_kopeks
+            telegram_id = user.telegram_id
 
+            # Савепоинт на каждого: сбой Remnawave у одного клиента раньше
+            # откатывал всю транзакцию — и списания у уже продлённых до него
+            # (а продление в Remnawave оставалось — бесплатная подписка).
             try:
-                await wallet.debit(
-                    db,
-                    user,
-                    plan.price_kopeks,
-                    WalletTxType.AUTO_RENEWAL,
-                    description=f"Автопродление: {plan.title}",
-                )
+                async with db.begin_nested():
+                    if amount > 0:
+                        await wallet.debit(
+                            db,
+                            user,
+                            amount,
+                            WalletTxType.AUTO_RENEWAL,
+                            description=f"Автопродление: {plan.title}",
+                        )
+                    user = await subs.grant_plan(
+                        db, config, user, plan, source="auto_renewal", amount_kopeks=amount
+                    )
             except wallet.InsufficientFunds:
                 continue  # не хватает баланса — пропускаем без ошибки
-
-            user = await subs.grant_plan(db, config, user, plan, source="auto_renewal")
+            except Exception:  # noqa: BLE001
+                log.exception("Не удалось автопродлить подписку tg=%s", telegram_id)
+                continue
             renewed += 1
+
+            await subs.after_paid_purchase(
+                db,
+                config,
+                user,
+                amount,
+                plan_title=plan.title,
+                kind="auto_renewal",
+                method="auto_renewal",
+                consume_discount=False,
+            )
 
             text = texts.render(
                 "{@check} Подписка автоматически продлена: {title} до {until}",

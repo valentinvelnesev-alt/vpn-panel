@@ -4,6 +4,7 @@
 так у клиента не меняется ссылка подписки при каждой оплате.
 """
 
+import html
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config, PlanView
 from app.services import referral
-from app.services.notify import send as notify_send
+from app.services.notify import send_sales as notify_sales
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
 
@@ -241,7 +242,13 @@ async def grant_bonus_days(
 
 
 async def grant_plan(
-    db: AsyncSession, config: Config, user: BotUser, plan: PlanView, *, source: str
+    db: AsyncSession,
+    config: Config,
+    user: BotUser,
+    plan: PlanView,
+    *,
+    source: str,
+    amount_kopeks: int | None = None,
 ) -> BotUser:
     return await grant(
         db,
@@ -253,7 +260,7 @@ async def grant_plan(
         traffic_limit_bytes=plan.traffic_limit_bytes,
         source=source,
         plan_id=plan.id,
-        amount_kopeks=plan.price_kopeks,
+        amount_kopeks=plan.price_kopeks if amount_kopeks is None else amount_kopeks,
     )
 
 
@@ -268,7 +275,13 @@ async def list_subscriptions(db: AsyncSession, user: BotUser) -> list[BotSubscri
 
 
 async def create_subscription(
-    db: AsyncSession, config: Config, user: BotUser, plan: PlanView, *, source: str
+    db: AsyncSession,
+    config: Config,
+    user: BotUser,
+    plan: PlanView,
+    *,
+    source: str,
+    amount_kopeks: int | None = None,
 ) -> BotSubscription:
     """Покупка тарифа как в исходном боте: КАЖДАЯ покупка заводит новый
     независимый ключ (свой аккаунт Remnawave), а не продлевает старый.
@@ -317,7 +330,7 @@ async def create_subscription(
             plan_id=plan.id,
             subscription_id=subscription.id,
             days=plan.days,
-            amount_kopeks=plan.price_kopeks,
+            amount_kopeks=plan.price_kopeks if amount_kopeks is None else amount_kopeks,
             source=source,
             expire_at=subscription.expire_at,
         )
@@ -329,7 +342,12 @@ async def create_subscription(
 
 
 async def extend_subscription(
-    db: AsyncSession, config: Config, subscription: BotSubscription, plan: PlanView
+    db: AsyncSession,
+    config: Config,
+    subscription: BotSubscription,
+    plan: PlanView,
+    *,
+    amount_kopeks: int | None = None,
 ) -> BotSubscription:
     """Продление КОНКРЕТНОГО ключа — из экрана «Мои подписки» → ключ →
     «Продлить». В отличие от `create_subscription`, не заводит новый
@@ -369,7 +387,7 @@ async def extend_subscription(
             plan_id=plan.id,
             subscription_id=subscription.id,
             days=plan.days,
-            amount_kopeks=plan.price_kopeks,
+            amount_kopeks=plan.price_kopeks if amount_kopeks is None else amount_kopeks,
             source="renewal",
             expire_at=subscription.expire_at,
         )
@@ -380,6 +398,46 @@ async def extend_subscription(
     return subscription
 
 
+SALE_KIND_LABEL = {
+    "purchase": "💰 Новая покупка",
+    "renewal": "🔄 Продление подписки",
+    "auto_renewal": "🔁 Автопродление с баланса",
+}
+
+
+def sale_text(
+    user: BotUser,
+    *,
+    kind: str,
+    plan_title: str,
+    amount_kopeks: int,
+    method: str | None = None,
+    discount_percent: int = 0,
+) -> str:
+    """Текст уведомления о продаже для чата из панели (HTML)."""
+    who = f"@{user.username}" if user.username else html.escape(user.first_name or "—")
+    lines = [
+        f"<b>{SALE_KIND_LABEL.get(kind, SALE_KIND_LABEL['purchase'])}</b>",
+        f"Пользователь: {html.escape(who)} (<code>{user.telegram_id}</code>)",
+        f"Тариф: {html.escape(plan_title)}",
+        f"Сумма: {amount_kopeks / 100:.2f} ₽"
+        + (f" (скидка {discount_percent}%)" if discount_percent else ""),
+    ]
+    if method:
+        lines.append(f"Способ оплаты: {html.escape(_METHOD_LABEL.get(method, method))}")
+    return "\n".join(lines)
+
+
+_METHOD_LABEL = {
+    "platega": "Platega (СБП/карта)",
+    "rollypay": "RollyPay (СБП)",
+    "cryptobot": "CryptoBot",
+    "stars": "Telegram Stars",
+    "wallet": "баланс",
+    "auto_renewal": "баланс (автопродление)",
+}
+
+
 async def after_paid_purchase(
     db: AsyncSession,
     config: Config,
@@ -387,26 +445,35 @@ async def after_paid_purchase(
     amount_kopeks: int,
     *,
     plan_title: str = "тариф",
+    kind: str = "purchase",
+    method: str | None = None,
+    discount_percent: int = 0,
+    consume_discount: bool = True,
 ) -> list[tuple[BotUser, int]]:
     """Единая точка после успешной оплаты тарифа (не пополнения баланса):
-    начисляет денежную комиссию рефереру(ам) и шлёт уведомление о продаже
-    в чат, если он настроен в панели. Не трогает разовый бонус в днях —
-    им по-прежнему занимается `apply_referral_reward`.
+    гасит использованную скидку промокода, начисляет денежную комиссию
+    рефереру(ам) и шлёт уведомление о продаже в чат, если он настроен в
+    панели. Не трогает разовый бонус в днях — им по-прежнему занимается
+    `apply_referral_reward`.
 
     Возвращает список (реферер, начислено копеек) — вызывающий код сам
     решает, как и когда доставить эти уведомления (сразу или пачкой).
     """
+    if consume_discount and user.pending_discount_percent:
+        user.pending_discount_percent = 0
+
     awarded = await referral.award_commission(db, config, user, amount_kopeks)
 
     if config.purchase_notify_chat_id and config.token:
-        uname = f"@{user.username}" if user.username else str(user.telegram_id)
-        text = (
-            f"💰 Новая продажа\n"
-            f"Пользователь: {uname}\n"
-            f"Тариф: {plan_title}\n"
-            f"Сумма: {amount_kopeks / 100:.2f} ₽"
+        text = sale_text(
+            user,
+            kind=kind,
+            plan_title=plan_title,
+            amount_kopeks=amount_kopeks,
+            method=method,
+            discount_percent=discount_percent,
         )
-        await notify_send(config.token, config.purchase_notify_chat_id, text)
+        await notify_sales(config.token, config.purchase_notify_chat_id, text)
 
     return awarded
 
@@ -439,3 +506,33 @@ def is_active(user: BotUser) -> bool:
     if expire.tzinfo is None:
         expire = expire.replace(tzinfo=UTC)
     return expire > datetime.now(UTC)
+
+
+async def has_subscription(db: AsyncSession, user: BotUser) -> bool:
+    """Есть ли у пользователя хоть один ключ (активный или истёкший)."""
+    if user.remnawave_uuid:
+        return True
+    found = await db.scalar(
+        select(BotSubscription.id).where(BotSubscription.user_id == user.id).limit(1)
+    )
+    return found is not None
+
+
+async def renew_target(db: AsyncSession, user: BotUser) -> BotSubscription | None:
+    """Ключ, который продлевает «Купить», когда несколько подписок не
+    разрешены: основной (BotUser.remnawave_uuid), иначе — живущий дольше всех."""
+    if user.remnawave_uuid:
+        main = await db.scalar(
+            select(BotSubscription).where(
+                BotSubscription.user_id == user.id,
+                BotSubscription.remnawave_id == int(user.remnawave_uuid),
+            )
+        )
+        if main is not None:
+            return main
+    return await db.scalar(
+        select(BotSubscription)
+        .where(BotSubscription.user_id == user.id)
+        .order_by(BotSubscription.expire_at.desc().nulls_last())
+        .limit(1)
+    )

@@ -7,6 +7,20 @@ import BotPlans from './BotPlans'
 import BotPromo from './BotPromo'
 import BotReferral from './BotReferral'
 
+// Совпадает с MENU_BUTTONS в bot/app/keyboards.py.
+const MENU_BUTTONS: [string, string][] = [
+  ['trial', '🎁 Попробовать бесплатно'],
+  ['subscriptions', '🔑 Мои подписки'],
+  ['profile', '👤 Мой профиль (личный кабинет)'],
+  ['promo', '🎟 Промокод'],
+  ['referral', '🎁 Пригласить друга'],
+  ['channel', '📢 Наш канал'],
+  ['support', '💬 Поддержка / помощь'],
+  ['balance', '💰 Баланс и пополнение (в профиле)'],
+  ['history', '🧾 История покупок (в профиле)'],
+  ['help', 'Команда /help'],
+]
+
 const STATE_LABEL: Record<BotStatus['state'], [string, string]> = {
   running: ['bg-success', 'работает'],
   stopped: ['bg-muted', 'остановлен'],
@@ -164,13 +178,41 @@ function SettingsCard({ status }: { status: BotStatus }) {
 
   useEffect(() => setForm(status), [status])
 
+  const [chatInput, setChatInput] = useState(status.purchase_notify_chat_id?.toString() ?? '')
+  useEffect(
+    () => setChatInput(status.purchase_notify_chat_id?.toString() ?? ''),
+    [status.purchase_notify_chat_id],
+  )
+
+  const testChat = useMutation({
+    mutationFn: () => panel.testNotifyChat(chatInput.trim()),
+    onSuccess: (data) => {
+      // @имя группы превращаем в числовой id — в настройке хранится он.
+      if (data.ok && data.chat_id !== null) setChatInput(String(data.chat_id))
+    },
+  })
+
   const save = useMutation({
-    mutationFn: () => panel.saveBotSettings(form),
+    mutationFn: () => {
+      const raw = chatInput.trim()
+      if (raw && !/^-?\d+$/.test(raw)) {
+        throw new Error('Нажмите «Проверить» у чата продаж — панель подставит числовой id группы')
+      }
+      return panel.saveBotSettings({ ...form, purchase_notify_chat_id: raw ? Number(raw) : null })
+    },
     onSuccess: (data) => queryClient.setQueryData(['bot'], data),
   })
 
   const set = <K extends keyof BotSettings>(key: K, value: BotSettings[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
+
+  const toggleMenu = (key: string) =>
+    set(
+      'menu_hidden',
+      form.menu_hidden.includes(key)
+        ? form.menu_hidden.filter((k) => k !== key)
+        : [...form.menu_hidden, key],
+    )
 
   const toggleTrialSquad = (uuid: string) =>
     set(
@@ -298,23 +340,93 @@ function SettingsCard({ status }: { status: BotStatus }) {
 
         <hr />
 
-        <Field label="Чат для уведомлений о продажах (ID, необязательно)">
-          <Input
-            type="number"
-            placeholder="например -1001234567890"
-            value={form.purchase_notify_chat_id ?? ''}
-            onChange={(e) =>
-              set(
-                'purchase_notify_chat_id',
-                e.target.value ? Number(e.target.value) : null
-              )
-            }
+        <div>
+          <span className="text-sm font-medium">Меню бота</span>
+          <p className="mt-1 text-xs text-muted">
+            Снимите галочку, чтобы спрятать кнопку у клиентов. Кнопки канала и поддержки
+            показываются, только если для них указана ссылка.
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {MENU_BUTTONS.map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={!form.menu_hidden.includes(key)}
+                  onChange={() => toggleMenu(key)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4"
+            checked={form.allow_multiple_subscriptions}
+            onChange={(e) => set('allow_multiple_subscriptions', e.target.checked)}
           />
+          <span>
+            Разрешить несколько подписок на одного клиента
+            <span className="block text-xs text-muted">
+              Выключено: у кого уже есть подписка, видит «Продлить подписку», и оплата
+              продлевает её (ссылка не меняется). Включено: дополнительно появляется «Купить
+              ещё одну» — отдельный ключ.
+            </span>
+          </span>
+        </label>
+
+        <hr />
+
+        <Field
+          label="Чат для уведомлений о продажах (необязательно)"
+          hint={
+            <>
+              ID группы целиком, с «-100» в начале (например -1001234567890), или @имя
+              публичной группы. Добавьте бота в группу и нажмите «Проверить» — придёт
+              тестовое сообщение. Уведомления приходят о покупках, продлениях и
+              автопродлениях.
+            </>
+          }
+        >
+          <div className="flex gap-2">
+            <Input
+              placeholder="-1001234567890 или @mygroup"
+              value={chatInput}
+              onChange={(e) => {
+                setChatInput(e.target.value)
+                testChat.reset()
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => testChat.mutate()}
+              disabled={!chatInput.trim() || testChat.isPending}
+            >
+              {testChat.isPending ? 'Проверяю…' : 'Проверить'}
+            </Button>
+          </div>
         </Field>
-        <p className="text-sm text-muted">
-          Бот должен быть добавлен в этот чат/группу. Оставьте пустым, чтобы
-          отключить уведомления о продажах.
-        </p>
+        {testChat.data && (
+          <p
+            className={`flex items-start gap-2 text-sm ${
+              testChat.data.ok ? 'text-success' : 'text-danger'
+            }`}
+          >
+            {testChat.data.ok ? (
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+            ) : (
+              <XCircle className="mt-0.5 size-4 shrink-0" />
+            )}
+            {testChat.data.message}
+          </p>
+        )}
+        {testChat.isError && (
+          <p className="text-sm text-danger">{(testChat.error as Error).message}</p>
+        )}
 
         <Field
           label="Администраторы бота (Telegram ID через запятую)"

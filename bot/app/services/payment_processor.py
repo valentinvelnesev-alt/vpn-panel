@@ -12,6 +12,8 @@
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
 from app import config as config_module
 from app import texts
 from app.services import subscriptions as subs
@@ -33,7 +35,12 @@ log = logging.getLogger("bot.payment_processor")
 
 async def handle(payment_id: int) -> None:
     async with session() as db:
-        payment = await db.get(Payment, payment_id)
+        # FOR UPDATE: одну оплату одновременно могут применять событие из
+        # шины, воркер догонки, опрос провайдера и кнопка «Проверить оплату».
+        # Без блокировки двое читали applied_at IS NULL и оба выдавали ключ.
+        payment = await db.scalar(
+            select(Payment).where(Payment.id == payment_id).with_for_update()
+        )
         if payment is None:
             log.warning("payment_completed для несуществующего платежа %s", payment_id)
             return
@@ -46,8 +53,10 @@ async def handle(payment_id: int) -> None:
 
         user = await db.get(BotUser, payment.user_id)
         config = await config_module.load(db)
-        if user is None or not config.token:
+        if user is None:
             return
+        # Без токена (бот выключен в панели) оплату всё равно применяем —
+        # просто не сможем написать клиенту, send() это переживёт.
 
         if payment.purpose == PaymentPurpose.TOPUP:
             await wallet.credit(
@@ -66,33 +75,83 @@ async def handle(payment_id: int) -> None:
         else:
             plan_row = await db.get(Plan, payment.plan_id) if payment.plan_id else None
             if plan_row is None:
+                # Тариф удалили, пока клиент платил. Деньги не теряем —
+                # зачисляем на баланс, с него можно купить другой тариф.
                 log.error("У платежа %s не найден тариф %s", payment_id, payment.plan_id)
+                await wallet.credit(
+                    db,
+                    user,
+                    payment.amount_kopeks,
+                    WalletTxType.REFUND,
+                    description=f"Тариф удалён, платёж #{payment.id}",
+                )
+                await send(
+                    config.token,
+                    user.telegram_id,
+                    texts.render(
+                        "{@warning} Тариф больше недоступен — {amount} ₽ зачислены на баланс",
+                        config.emoji_mode,
+                        config.premium_emoji,
+                        amount=f"{payment.amount_kopeks / 100:.2f}",
+                    ),
+                )
                 return
             plan = config_module.plan_view(plan_row)
+            subscription = None
             if payment.subscription_id is not None:
                 subscription = await db.get(BotSubscription, payment.subscription_id)
-                if subscription is None or subscription.user_id != user.id:
-                    log.error(
+                if subscription is not None and subscription.user_id != user.id:
+                    subscription = None
+                if subscription is None:
+                    # Ключ удалили, пока клиент платил, — не теряем оплату,
+                    # а выдаём подписку так же, как при обычной покупке.
+                    log.warning(
                         "У платежа %s не найден ключ %s", payment_id, payment.subscription_id
                     )
-                    return
-                subscription = await subs.extend_subscription(db, config, subscription, plan)
-                until = subscription.expire_at
-            else:
-                # Обычная покупка тарифа — как в исходном боте, заводит
-                # НОВЫЙ независимый ключ, а не продлевает существующий.
-                subscription = await subs.create_subscription(
-                    db, config, user, plan, source=payment.provider
+            if (
+                subscription is None
+                and not config.allow_multiple_subscriptions
+                and await subs.has_subscription(db, user)
+            ):
+                # Счёт выставили до того, как у клиента появился ключ (или до
+                # смены настройки) — всё равно продлеваем, а не плодим второй.
+                subscription = await subs.renew_target(db, user)
+
+            if subscription is not None:
+                subscription = await subs.extend_subscription(
+                    db, config, subscription, plan, amount_kopeks=payment.amount_kopeks
                 )
-                until = subscription.expire_at
+                kind = "renewal"
+            else:
+                subscription = await subs.create_subscription(
+                    db,
+                    config,
+                    user,
+                    plan,
+                    source=payment.provider,
+                    amount_kopeks=payment.amount_kopeks,
+                )
+                kind = "purchase"
+            until = subscription.expire_at
             text = texts.render(
-                "{@check} Оплата получена, подписка продлена до {until}",
+                "{@check} Оплата получена, подписка {action} до {until}",
                 config.emoji_mode,
                 config.premium_emoji,
+                action="продлена" if kind == "renewal" else "активна",
                 until=until.strftime("%d.%m.%Y") if until else "—",
             )
+            discount = 0
+            if plan.price_kopeks and payment.amount_kopeks < plan.price_kopeks:
+                discount = round(100 - payment.amount_kopeks * 100 / plan.price_kopeks)
             commissions = await subs.after_paid_purchase(
-                db, config, user, payment.amount_kopeks, plan_title=plan.title
+                db,
+                config,
+                user,
+                payment.amount_kopeks,
+                plan_title=plan.title,
+                kind=kind,
+                method=str(payment.provider),
+                discount_percent=discount,
             )
             for referrer, share in commissions:
                 await send(

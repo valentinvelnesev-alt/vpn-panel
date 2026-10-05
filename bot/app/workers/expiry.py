@@ -78,14 +78,16 @@ async def run_once(bot: Bot, config: Config) -> int:
     sent = 0
 
     async with session() as db:
-        candidates = await db.scalars(
-            select(BotUser).where(
-                BotUser.expire_at.is_not(None),
-                BotUser.expire_at <= horizon,
-                BotUser.has_stopped_bot.is_(False),
-                BotUser.is_blocked.is_(False),
+        candidates = (
+            await db.scalars(
+                select(BotUser).where(
+                    BotUser.expire_at.is_not(None),
+                    BotUser.expire_at <= horizon,
+                    BotUser.has_stopped_bot.is_(False),
+                    BotUser.is_blocked.is_(False),
+                )
             )
-        )
+        ).all()
 
         for user in candidates:
             expire_at = user.expire_at
@@ -104,17 +106,21 @@ async def run_once(bot: Bot, config: Config) -> int:
                 expire_at=expire_at,
                 sent_at=now,
             )
-            db.add(marker)
+            # Савепоинт, а не db.rollback(): полный откат expire'ил бы все
+            # загруженные BotUser, и следующее обращение к атрибуту в цикле
+            # падало бы в async-сессии (MissingGreenlet) — воркер вставал.
             try:
-                await db.flush()
+                async with db.begin_nested():
+                    db.add(marker)
+                    await db.flush()
             except IntegrityError:
-                await db.rollback()
                 continue
 
             if await _notify(bot, config, user, window):
                 sent += 1
             else:
                 await db.delete(marker)
+                await db.flush()
 
             await asyncio.sleep(0.05)  # мягкий темп, чтобы не ловить лимиты
 

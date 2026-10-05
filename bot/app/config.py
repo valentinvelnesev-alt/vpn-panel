@@ -26,6 +26,11 @@ class PlanView:
     traffic_limit_bytes: int
     category_id: int | None = None
     category_title: str | None = None
+    owner_user_id: int | None = None
+
+    @property
+    def is_personal(self) -> bool:
+        return self.owner_user_id is not None
 
     @property
     def price_rub(self) -> float:
@@ -45,6 +50,7 @@ def plan_view(row: PlanRow) -> PlanView:
         traffic_limit_bytes=row.traffic_limit_bytes,
         category_id=row.category_id,
         category_title=row.category.title if row.category else None,
+        owner_user_id=row.owner_user_id,
     )
 
 
@@ -81,6 +87,13 @@ class Config:
     privacy_policy_url: str | None = None
     terms_url: str | None = None
 
+    discount_percent: int = 0
+    discount_until: datetime | None = None
+    allow_multiple_subscriptions: bool = False
+    menu_hidden: frozenset[str] = frozenset()
+
+    # Только общие тарифы: персональные читаются из БД под конкретного
+    # пользователя (см. services/pricing.py) — они меняются без перезапуска.
     plans: list[PlanView] = field(default_factory=list)
 
     remnawave_url: str | None = None
@@ -101,6 +114,10 @@ class Config:
     def can_run(self) -> bool:
         return bool(self.enabled and self.token)
 
+    def shows(self, button: str) -> bool:
+        """Включена ли кнопка меню в панели (см. keyboards.MENU_BUTTONS)."""
+        return button not in self.menu_hidden
+
 
 async def load(db: AsyncSession) -> Config:
     row = await db.get(BotConfig, 1)
@@ -112,7 +129,7 @@ async def load(db: AsyncSession) -> Config:
     plans = await db.scalars(
         select(PlanRow)
         .options(selectinload(PlanRow.category))
-        .where(PlanRow.is_active.is_(True))
+        .where(PlanRow.is_active.is_(True), PlanRow.owner_user_id.is_(None))
         .order_by(PlanRow.sort_order, PlanRow.days)
     )
 
@@ -164,6 +181,10 @@ async def load(db: AsyncSession) -> Config:
         admin_telegram_ids=list(row.admin_telegram_ids or []),
         privacy_policy_url=row.privacy_policy_url,
         terms_url=row.terms_url,
+        discount_percent=row.discount_percent or 0,
+        discount_until=row.discount_until,
+        allow_multiple_subscriptions=row.allow_multiple_subscriptions,
+        menu_hidden=frozenset(row.menu_hidden or []),
         plans=[plan_view(p) for p in plans],
         remnawave_url=raw.get("remnawave_url"),
         remnawave_token=raw.get("remnawave_token"),

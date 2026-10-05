@@ -1,46 +1,75 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.config import Config
+from app.config import Config, PlanView
+from app.services.pricing import Price, button_price
 
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
 
 
-def main_menu(config: Config, *, trial_available: bool):
-    """Структура и порядок кнопок — как в исходном боте: покупка/список
-    ключей, профиль/промокод, приглашение друга, канал/поддержка. Каждая
-    покупка тарифа заводит отдельный ключ (см. «Мои подписки»), поэтому
-    здесь нет разделения «купить» / «продлить» — это внутри карточки ключа.
+# Кнопки, которые админ может скрыть в панели (Бот → Меню бота). Ключи
+# хранятся в BotConfig.menu_hidden; подписи дублируются в панели.
+MENU_BUTTONS: dict[str, str] = {
+    "trial": "Попробовать бесплатно",
+    "subscriptions": "Мои подписки",
+    "profile": "Мой профиль",
+    "promo": "Промокод",
+    "referral": "Пригласить друга",
+    "channel": "Наш канал",
+    "support": "Поддержка",
+    "balance": "Баланс и пополнение",
+    "history": "История покупок",
+    "help": "Команда /help",
+}
+
+
+def _rows(buttons: list[InlineKeyboardButton], per_row: int = 2) -> list[list[InlineKeyboardButton]]:
+    return [buttons[i : i + per_row] for i in range(0, len(buttons), per_row)]
+
+
+def main_menu(config: Config, *, trial_available: bool, has_subscription: bool = False):
+    """Покупка/продление, ключи, профиль/промокод, приглашение, канал/поддержка.
+
+    Нет ни одной подписки — «Купить подписку». Есть — «Продлить подписку»
+    (продлевает существующий ключ, ссылка у клиента не меняется). Новый
+    отдельный ключ — только через «Купить ещё одну», и только если в панели
+    разрешено несколько подписок на пользователя.
     """
-    builder = InlineKeyboardBuilder()
-    if trial_available:
-        builder.button(text="🎁 Попробовать бесплатно", callback_data="trial")
+    B = InlineKeyboardButton
+    rows: list[list[InlineKeyboardButton]] = []
+    if trial_available and config.shows("trial"):
+        rows.append([B(text="🎁 Попробовать бесплатно", callback_data="trial")])
 
-    builder.button(text="💳 Купить подписку", callback_data="plans")
-    builder.button(text="🔑 Мои подписки", callback_data="my_subscriptions")
+    if has_subscription:
+        rows.append([B(text="🔄 Продлить подписку", callback_data="renew")])
+        if config.allow_multiple_subscriptions:
+            rows.append([B(text="➕ Купить ещё одну", callback_data="plans_new")])
+    else:
+        rows.append([B(text="💳 Купить подписку", callback_data="plans")])
 
-    builder.button(text="👤 Мой профиль", callback_data="profile")
-    builder.button(text="🎟 Промокод", callback_data="promo")
+    if config.shows("subscriptions"):
+        rows.append([B(text="🔑 Мои подписки", callback_data="my_subscriptions")])
 
-    if config.referral_enabled or config.referral_commission_enabled:
-        builder.button(text="🎁 Пригласить друга", callback_data="referral")
+    pair = []
+    if config.shows("profile"):
+        pair.append(B(text="👤 Мой профиль", callback_data="profile"))
+    if config.shows("promo"):
+        pair.append(B(text="🎟 Промокод", callback_data="promo"))
+    rows += _rows(pair)
 
-    channel_support_row = 0
-    if config.channel_url:
-        builder.button(text="📢 Наш канал", url=config.channel_url)
-        channel_support_row += 1
-    if config.support_url:
-        builder.button(text="💬 Поддержка", url=config.support_url)
-        channel_support_row += 1
+    if (config.referral_enabled or config.referral_commission_enabled) and config.shows(
+        "referral"
+    ):
+        rows.append([B(text="🎁 Пригласить друга", callback_data="referral")])
 
-    rows = [1] if trial_available else []
-    rows += [2, 2]
-    if config.referral_enabled or config.referral_commission_enabled:
-        rows.append(1)
-    if channel_support_row:
-        rows.append(channel_support_row)
-    builder.adjust(*rows)
-    return builder.as_markup()
+    pair = []
+    if config.channel_url and config.shows("channel"):
+        pair.append(B(text="📢 Наш канал", url=config.channel_url))
+    if config.support_url and config.shows("support"):
+        pair.append(B(text="💬 Поддержка", url=config.support_url))
+    rows += _rows(pair)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def plan_categories(config: Config) -> list[tuple[int | None, str]]:
@@ -58,32 +87,53 @@ def plan_categories(config: Config) -> list[tuple[int | None, str]]:
     return list(seen.items())
 
 
-def categories_menu(config: Config, *, prefix: str = "buy"):
-    builder = InlineKeyboardBuilder()
-    for category_id, title in plan_categories(config):
-        builder.button(
-            text=title, callback_data=f"plancat:{prefix}:{category_id if category_id is not None else 0}"
-        )
-    builder.button(text="‹ Назад", callback_data="menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def plans_menu(config: Config, *, prefix: str = "buy", category_id: int | None = -1):
-    """category_id: -1 — без фильтра (все тарифы, старое поведение),
-    None — только тарифы без категории, иначе — тарифы этой категории."""
-    builder = InlineKeyboardBuilder()
-    for plan in config.plans:
-        if category_id != -1 and plan.category_id != category_id:
-            continue
-        price = f"{plan.price_rub:.0f} ₽".replace(".0", "")
-        builder.button(text=f"{plan.title} — {price}", callback_data=f"{prefix}:{plan.id}")
-    builder.button(
-        text="‹ Назад",
-        callback_data="plans" if plan_categories(config) else "menu",
+def _plan_button(plan: PlanView, price: Price, prefix: str) -> InlineKeyboardButton:
+    title = f"⭐ {plan.title}" if plan.is_personal else plan.title
+    return InlineKeyboardButton(
+        text=f"{title} — {button_price(price)}", callback_data=f"{prefix}:{plan.id}"
     )
-    builder.adjust(1)
-    return builder.as_markup()
+
+
+def plans_menu(
+    config: Config,
+    priced: list[tuple[PlanView, Price]],
+    *,
+    prefix: str = "buy",
+    category_id: int | None = -1,
+    back: str = "menu",
+):
+    """Список тарифов.
+
+    category_id == -1 — верхний уровень: персональные тарифы клиента, затем
+    либо вкладки категорий (если их больше одной), либо все общие тарифы.
+    Иначе — общие тарифы выбранной категории (None — «без категории»).
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    categories = plan_categories(config)
+    if category_id == -1:
+        rows += [[_plan_button(p, price, prefix)] for p, price in priced if p.is_personal]
+        if categories:
+            rows += [
+                [
+                    InlineKeyboardButton(
+                        text=title,
+                        callback_data=f"plancat:{prefix}:{cid if cid is not None else 0}",
+                    )
+                ]
+                for cid, title in categories
+            ]
+        else:
+            rows += [
+                [_plan_button(p, price, prefix)] for p, price in priced if not p.is_personal
+            ]
+    else:
+        rows += [
+            [_plan_button(p, price, prefix)]
+            for p, price in priced
+            if not p.is_personal and p.category_id == category_id
+        ]
+    rows.append([InlineKeyboardButton(text="‹ Назад", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def back_to_menu():
@@ -134,28 +184,28 @@ def subscription_detail_menu(subscription_id: int, *, has_url: bool) -> InlineKe
     return builder.as_markup()
 
 
-def profile_menu(config: Config) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="💰 Пополнить баланс", callback_data="wallet_topup")
-    builder.button(text="💳 Купить подписку", callback_data="plans")
-    builder.button(text="🧾 История покупок", callback_data="purchase_history")
+def profile_menu(config: Config, *, has_subscription: bool = False) -> InlineKeyboardMarkup:
+    B = InlineKeyboardButton
+    rows: list[list[InlineKeyboardButton]] = []
+    if config.shows("balance"):
+        rows.append([B(text="💰 Пополнить баланс", callback_data="wallet_topup")])
+    if has_subscription:
+        rows.append([B(text="🔄 Продлить подписку", callback_data="renew")])
+    else:
+        rows.append([B(text="💳 Купить подписку", callback_data="plans")])
+    if config.shows("history"):
+        rows.append([B(text="🧾 История покупок", callback_data="purchase_history")])
 
-    legal_row = 0
+    legal = []
     if config.privacy_policy_url:
-        builder.button(text="Политика конфиденциальности", url=config.privacy_policy_url)
-        legal_row += 1
+        legal.append(B(text="Политика конфиденциальности", url=config.privacy_policy_url))
     if config.terms_url:
-        builder.button(text="Пользовательское соглашение", url=config.terms_url)
-        legal_row += 1
+        legal.append(B(text="Пользовательское соглашение", url=config.terms_url))
+    if legal:
+        rows.append(legal)
 
-    builder.button(text="‹ Назад", callback_data="menu")
-
-    rows = [1, 1, 1]
-    if legal_row:
-        rows.append(legal_row)
-    rows.append(1)
-    builder.adjust(*rows)
-    return builder.as_markup()
+    rows.append([B(text="‹ Назад", callback_data="menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def wallet_menu():
@@ -168,9 +218,16 @@ def wallet_menu():
     return builder.as_markup()
 
 
-def providers_menu(config: Config, *, purpose: str, target: str):
-    """purpose: 'topup' или 'plan'; target: сумма или id тарифа."""
+def providers_menu(config: Config, *, purpose: str, target: str, free: bool = False):
+    """purpose: 'topup', 'plan' или 'renew'; target: сумма, id тарифа или
+    «ключ-тариф». free — тариф стал бесплатным (скидка 100%): внешние
+    кассы не принимают нулевые счета, остаётся только оформление сразу."""
     builder = InlineKeyboardBuilder()
+    if free and purpose in ("plan", "renew"):
+        builder.button(text="✅ Оформить бесплатно", callback_data=f"pay:{purpose}:wallet:{target}")
+        builder.button(text="‹ Назад", callback_data="menu")
+        builder.adjust(1)
+        return builder.as_markup()
     if config.platega_enabled:
         builder.button(text="СБП / карта", callback_data=f"pay:{purpose}:platega:{target}")
     if config.rollypay_enabled:
