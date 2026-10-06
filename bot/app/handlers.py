@@ -626,7 +626,9 @@ async def _show_checkout(
     if plan is None:
         await callback.answer("Тариф больше не доступен", show_alert=True)
         return
-    if not config.any_payment_ready:
+    is_admin = callback.from_user.id in config.admin_telegram_ids
+    # Админу способ «бесплатно» доступен и без настроенных платёжек.
+    if not config.any_payment_ready and not is_admin:
         await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
         return
 
@@ -634,7 +636,9 @@ async def _show_checkout(
         callback.message,
         config,
         _pay_header(config, plan, discount),
-        keyboards.providers_menu(config, purpose=purpose, target=f"{target_prefix}{plan.id}"),
+        keyboards.providers_menu(
+            config, purpose=purpose, target=f"{target_prefix}{plan.id}", free=is_admin
+        ),
     )
     await callback.answer()
 
@@ -844,6 +848,13 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
     if provider_name == "wallet":
         await _pay_from_wallet(callback, config, purpose, target)
         return
+    if provider_name == "free":
+        if callback.from_user.id not in config.admin_telegram_ids:
+            # Кнопку видит только админ, но callback_data можно подделать.
+            await callback.answer("Недоступно", show_alert=True)
+            return
+        await _pay_from_wallet(callback, config, purpose, target, free=True)
+        return
     if provider_name == "stars":
         await _pay_with_stars(callback, config, bot, purpose, target)
         return
@@ -897,10 +908,13 @@ async def cb_pay(callback: CallbackQuery, config: Config, bot: Bot) -> None:
 
 
 async def _pay_from_wallet(
-    callback: CallbackQuery, config: Config, purpose: str, target: str
+    callback: CallbackQuery, config: Config, purpose: str, target: str, *, free: bool = False
 ) -> None:
     """Списание с баланса и выдача — одна транзакция (сбой Remnawave вернёт
-    деньги). Реферальные начисления и уведомления — отдельно, после коммита."""
+    деньги). Реферальные начисления и уведомления — отдельно, после коммита.
+
+    free — выдача администратору без списания: в статистике это не продажа
+    (сумма 0, источник «admin»), рефералам и в чат продаж ничего не уходит."""
     async with session() as db:
         user = await subs.get_or_create_user(db, callback.from_user.id)
         pay = await _resolve_pay_target(db, config, user, purpose, target)
@@ -909,14 +923,17 @@ async def _pay_from_wallet(
                 "Из баланса можно оплатить тариф или трафик", show_alert=True
             )
             return
-        amount_kopeks = pay.amount_kopeks
-        try:
-            await wallet.debit(
-                db, user, amount_kopeks, WalletTxType.PURCHASE, description=pay.description
-            )
-        except wallet.InsufficientFunds as exc:
-            await callback.answer(str(exc), show_alert=True)
-            return
+        amount_kopeks = 0 if free else pay.amount_kopeks
+        source = "admin" if free else "wallet"
+        if not free:
+            try:
+                await wallet.debit(
+                    db, user, amount_kopeks, WalletTxType.PURCHASE, description=pay.description
+                )
+            except wallet.InsufficientFunds as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+        paid_note = "Выдано бесплатно" if free else "Оплачено с баланса"
 
         try:
             if pay.package is not None:
@@ -925,12 +942,13 @@ async def _pay_from_wallet(
                     config,
                     pay.subscription,
                     pay.package,
-                    source="wallet",
+                    source=source,
                     amount_kopeks=amount_kopeks,
                 )
                 done = t(
                     config,
-                    "{@check} Оплачено с баланса. Добавлено {gb} ГБ трафика.",
+                    "{@check} {note}. Добавлено {gb} ГБ трафика.",
+                    note=paid_note,
                     gb=pay.package.traffic_gb,
                 )
                 label = f"+{pay.package.traffic_gb} ГБ трафика"
@@ -940,18 +958,20 @@ async def _pay_from_wallet(
                 )
                 done = t(
                     config,
-                    "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
+                    "{@check} {note}. Подписка «{title}» действует до {until}",
+                    note=paid_note,
                     title=pay.plan.title,
                     until=_date(subscription.expire_at),
                 )
                 label = pay.plan.full_title
             else:
                 subscription = await subs.create_subscription(
-                    db, config, user, pay.plan, source="wallet", amount_kopeks=amount_kopeks
+                    db, config, user, pay.plan, source=source, amount_kopeks=amount_kopeks
                 )
                 done = t(
                     config,
-                    "{@check} Оплачено с баланса. Подписка «{title}» действует до {until}",
+                    "{@check} {note}. Подписка «{title}» действует до {until}",
+                    note=paid_note,
                     title=pay.plan.title,
                     until=_date(subscription.expire_at),
                 )
@@ -967,7 +987,7 @@ async def _pay_from_wallet(
                 show_alert=True,
             )
             raise
-        if pay.plan is not None:
+        if pay.plan is not None and not free:
             user.discount_percent = 0
         user_id = user.id
         kind = (
@@ -978,6 +998,8 @@ async def _pay_from_wallet(
 
     await screen(callback.message, config, done, keyboards.back_to_menu(config))
     await callback.answer()
+    if free:
+        return
     await payment_processor.after_purchase_effects(
         config, user_id, amount_kopeks, label, kind=kind, method="wallet"
     )
@@ -1417,6 +1439,7 @@ async def cb_traffic_pick(callback: CallbackQuery, config: Config) -> None:
             purpose="traffic",
             target=f"{raw_id}-{package.id}",
             back=f"subtraffic:{raw_id}",
+            free=callback.from_user.id in config.admin_telegram_ids,
         ),
     )
     await callback.answer()
