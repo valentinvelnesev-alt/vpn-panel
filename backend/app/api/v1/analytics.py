@@ -80,7 +80,7 @@ async def overview(admin: CurrentAdmin, db: DbSession) -> AnalyticsOverview:
     converted = (
         await db.scalar(
             select(func.count(func.distinct(Purchase.user_id))).where(
-                Purchase.source != "trial",
+                Purchase.source.notin_(("trial", "admin")),
                 Purchase.user_id.in_(
                     select(BotUser.id).where(BotUser.trial_used.is_(True))
                 ),

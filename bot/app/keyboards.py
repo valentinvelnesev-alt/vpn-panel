@@ -296,11 +296,15 @@ def plans_menu(
     return _markup(rows)
 
 
-def providers_menu(config: Config, *, purpose: str, target: str, back: str = "menu") -> InlineKeyboardMarkup:
+def providers_menu(
+    config: Config, *, purpose: str, target: str, back: str = "menu", free: bool = False
+) -> InlineKeyboardMarkup:
     """purpose: 'topup', 'plan' или 'renew'; target: сумма или id тарифа.
 
     Показываем только провайдеров с заполненными реквизитами — кнопка
-    «включённого» провайдера без ключей вела в тупик."""
+    «включённого» провайдера без ключей вела в тупик.
+
+    free — показать администратору выдачу без оплаты."""
     rows = []
     if config.platega_ready:
         rows.append([_btn(config, "СБП / карта", callback_data=f"pay:{purpose}:platega:{target}", icon="sbp")])
@@ -312,6 +316,8 @@ def providers_menu(config: Config, *, purpose: str, target: str, back: str = "me
         rows.append([_btn(config, "Telegram Stars", callback_data=f"pay:{purpose}:stars:{target}", icon="star")])
     if purpose in ("plan", "renew"):
         rows.append([_btn(config, "Оплатить с баланса", callback_data=f"pay:{purpose}:wallet:{target}", icon="balance")])
+    if free and purpose in ("plan", "renew", "traffic"):
+        rows.append([_btn(config, "Бесплатно (админ)", callback_data=f"pay:{purpose}:free:{target}", icon="gift")])
     rows.append(
         [
             _btn(config, "Назад", callback_data=back, icon="back"),

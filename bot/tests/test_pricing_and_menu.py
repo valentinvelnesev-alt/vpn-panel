@@ -206,6 +206,75 @@ async def test_wallet_payment_renews_with_discount(config, remote, monkeypatch) 
     assert "Оплачено с баланса" in callback.message.edit_text.await_args.args[0]
 
 
+# ── Выдача администратору без оплаты ──────────────────────────────────
+def test_free_button_only_for_admin_and_only_for_purchases(config) -> None:
+    def free_in(markup) -> bool:
+        return any(c.endswith(":free:1") for c in _callbacks(markup))
+
+    assert free_in(keyboards.providers_menu(config, purpose="plan", target="1", free=True))
+    assert free_in(keyboards.providers_menu(config, purpose="renew", target="1", free=True))
+    assert not free_in(keyboards.providers_menu(config, purpose="plan", target="1"))
+    assert not free_in(keyboards.providers_menu(config, purpose="topup", target="1", free=True))
+
+
+async def _free_callback(cfg, user_id: int, data: str):
+    callback = MagicMock()
+    callback.from_user.id = user_id
+    callback.answer = AsyncMock()
+    callback.message.photo = None
+    callback.message.edit_text = AsyncMock()
+    callback.data = data
+    await handlers.cb_pay(callback, cfg, MagicMock())
+    return callback
+
+
+async def _fresh_db() -> None:
+    from shared.db.base import Base
+    from shared.db.session import engine as shared_engine
+
+    async with shared_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def test_admin_gets_subscription_for_free(config, remote, monkeypatch) -> None:
+    from shared.db.models import BotUser, Purchase
+    from shared.db.session import SessionLocal
+
+    await _fresh_db()
+    notify = AsyncMock()
+    monkeypatch.setattr(subs, "notify_sales", notify)
+    cfg = replace(config, admin_telegram_ids=[4242])
+
+    callback = await _free_callback(cfg, 4242, f"pay:plan:free:{PLAN.id}")
+
+    async with SessionLocal() as db:
+        user = await db.scalar(select(BotUser).where(BotUser.telegram_id == 4242))
+        keys = await subs.list_subscriptions(db, user)
+        purchase = await db.scalar(select(Purchase))
+        wallet_row = await db.scalar(select(Wallet).where(Wallet.user_id == user.id))
+    assert len(keys) == 1 and subs.is_active(user)
+    assert purchase.source == "admin" and purchase.amount_kopeks == 0
+    assert wallet_row is None or wallet_row.balance_kopeks == 0
+    assert "Выдано бесплатно" in callback.message.edit_text.await_args.args[0]
+    notify.assert_not_awaited()  # не продажа — в чат продаж ничего не уходит
+
+
+async def test_free_payment_is_refused_for_non_admin(config, remote) -> None:
+    from shared.db.models import BotUser
+    from shared.db.session import SessionLocal
+
+    await _fresh_db()
+    cfg = replace(config, admin_telegram_ids=[1])
+
+    callback = await _free_callback(cfg, 4242, f"pay:plan:free:{PLAN.id}")
+
+    callback.answer.assert_awaited_once()
+    assert callback.answer.await_args.kwargs.get("show_alert") is True
+    async with SessionLocal() as db:
+        assert await db.scalar(select(BotUser).where(BotUser.telegram_id == 4242)) is None
+
+
 # ── Раскладка, цвета, кнопка меню, QR (1.6.1) ─────────────────────────
 def test_menu_columns(config) -> None:
     cfg = replace(config, menu_columns=2, support_url="https://t.me/s", channel_url="https://t.me/c")

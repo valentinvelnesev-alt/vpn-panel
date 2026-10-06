@@ -28,6 +28,7 @@ const SOURCE_LABEL: Record<string, string> = {
   rollypay: 'СБП',
   cryptobot: 'криптовалюта',
   promo: 'промокод',
+  admin: 'выдано администратором',
   referral_reward: 'бонус за друга',
 }
 
