@@ -180,6 +180,7 @@ def devices_keyboard(subscription_id: int, url: str, overrides=None) -> InlineKe
                     icon_custom_emoji_id=icon_id("copy", overrides),
                 )
             ],
+            [b("QR-код для сканирования", callback_data=f"qr:{subscription_id}", icon="link")],
             [b("Назад", callback_data=f"viewsub:{subscription_id}", icon="back")],
         ]
     )

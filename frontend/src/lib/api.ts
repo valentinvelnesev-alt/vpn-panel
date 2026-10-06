@@ -212,7 +212,12 @@ export interface BotSettings {
   terms_url: string | null
   allow_multiple_subscriptions: boolean
   menu_hidden: string[]
+  menu_columns: number
+  menu_styles: Record<string, ButtonStyle>
+  menu_mode: 'keyboard' | 'commands'
 }
+
+export type ButtonStyle = 'primary' | 'success' | 'danger' | 'none'
 
 export interface BotStatus extends BotSettings {
   /** Картинка над экранами бота: имя файла и ссылка для предпросмотра. */
@@ -424,6 +429,7 @@ export const panel = {
   userStatusCounts: () => api<UserStatusCounts>('/users/status-counts'),
   updateUser: (id: string, json: UserUpdate) =>
     api<PanelUser>(`/users/${id}`, { method: 'PATCH', json }),
+  deleteUser: (id: string) => api<void>(`/users/${id}`, { method: 'DELETE' }),
   extendUser: (id: string, days: number) =>
     api<PanelUser>(`/users/${id}/extend`, { method: 'POST', json: { days } }),
   setUserStatus: (id: string, status: 'ACTIVE' | 'DISABLED') =>
@@ -476,6 +482,8 @@ export const panel = {
     return api<{ items: ClientRow[]; total: number }>(`/bot/clients?${query}`)
   },
   client: (id: number) => api<ClientDetail>(`/bot/clients/${id}`),
+  deleteClient: (id: number, withKeys: boolean) =>
+    api<void>(`/bot/clients/${id}?with_keys=${withKeys}`, { method: 'DELETE' }),
   adjustBalance: (id: number, json: { amount_rub: number; reason: string; notify: boolean }) =>
     api<ClientDetail>(`/bot/clients/${id}/balance`, { method: 'POST', json }),
   createPersonalPlan: (id: number, json: PlanInput) =>

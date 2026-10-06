@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -372,3 +373,47 @@ async def delete_personal_plan(
     plan = await _own_plan(db, user, plan_id)
     await db.delete(plan)
     _audit(db, admin, "client.plan.delete", request, str(user.telegram_id), plan_id=plan_id)
+
+
+# ── Удаление клиента ──────────────────────────────────────────────────
+@router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_client(
+    client_id: int,
+    admin: CurrentAdmin,
+    db: DbSession,
+    request: Request,
+    with_keys: bool = Query(True, description="Удалить и его ключи в Remnawave"),
+) -> None:
+    """Удаляет клиента бота вместе с балансом, историей и персональными
+    тарифами. with_keys — заодно удалить его аккаунты в Remnawave, иначе
+    VPN у него продолжит работать до конца срока."""
+    user = await _get_user(db, client_id)
+    keys = list(
+        await db.scalars(select(BotSubscription).where(BotSubscription.user_id == user.id))
+    )
+    failed = []
+    if with_keys and keys:
+        from app.services.remnawave_provider import get_client
+        from shared.remnawave import RemnawaveError
+
+        remnawave = await get_client(db)
+        for key in keys:
+            try:
+                await remnawave.delete_user(key.remote_ref)
+            except RemnawaveError as exc:
+                if exc.status_code != 404:
+                    failed.append(f"{key.username}: {exc}")
+    if failed:
+        # Клиента не удаляем: иначе потеряли бы связь с ключами, которые
+        # остались в Remnawave и продолжают работать.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Не удалось удалить ключи в Remnawave: " + "; ".join(failed),
+        )
+    _audit(
+        db, admin, "client.delete", request, str(user.telegram_id),
+        keys=len(keys), with_keys=with_keys,
+    )
+    # Одним DELETE: подписки, кошелёк, платежи и прочее удалит каскад в
+    # самой БД. ORM-каскад в async-сессии лениво грузил бы связи и падал.
+    await db.execute(sa_delete(BotUser).where(BotUser.id == user.id))

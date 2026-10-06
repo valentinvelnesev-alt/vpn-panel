@@ -85,3 +85,41 @@ async def sync_from_remote(
     if user is not None:
         await refresh_user_summary(db, user)
     return True
+
+
+async def forget_remote_key(
+    db: AsyncSession, *, remnawave_id: int | None, remnawave_uuid: str | None = None
+) -> None:
+    """Ключ удалён в Remnawave — убираем его у бота и пересчитываем сводку
+    владельца. Не осталось ни одного ключа — сводка обнуляется, иначе бот
+    показывал бы удалённую подписку и пытался её продлевать."""
+    rows = []
+    if remnawave_uuid:
+        rows += list(
+            await db.scalars(
+                select(BotSubscription).where(BotSubscription.remnawave_uuid == remnawave_uuid)
+            )
+        )
+    if remnawave_id is not None:
+        rows += list(
+            await db.scalars(
+                select(BotSubscription).where(BotSubscription.remnawave_id == remnawave_id)
+            )
+        )
+    owners = {row.user_id for row in rows}
+    for row in {r.id: r for r in rows}.values():
+        await db.delete(row)
+    await db.flush()
+    for user_id in owners:
+        user = await db.get(BotUser, user_id)
+        if user is None:
+            continue
+        left = await db.scalar(
+            select(BotSubscription.id).where(BotSubscription.user_id == user_id).limit(1)
+        )
+        if left is None:
+            user.remnawave_uuid = None
+            user.subscription_url = None
+            user.expire_at = None
+        else:
+            await refresh_user_summary(db, user)

@@ -160,6 +160,15 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
     },
   })
 
+  const remove = useMutation({
+    mutationFn: () => panel.deleteUser(user.ref),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      queryClient.invalidateQueries({ queryKey: ['user-status-counts'] })
+      onClose()
+    },
+  })
+
   const extend = useMutation({
     mutationFn: (days: number) => panel.extendUser(user.ref, days),
     onSuccess: (updated) => {
@@ -185,8 +194,26 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
       onClose={onClose}
       footer={
         <>
-          {save.isError && (
-            <p className="mr-auto text-sm text-danger">{(save.error as Error).message}</p>
+          <Button
+            variant="ghost"
+            className="mr-auto text-danger"
+            disabled={remove.isPending}
+            onClick={() => {
+              if (
+                confirm(
+                  `Удалить пользователя «${user.username}» в Remnawave? Подписка перестанет работать, это нельзя отменить.`,
+                )
+              )
+                remove.mutate()
+            }}
+          >
+            <Trash2 className="size-4" />
+            Удалить
+          </Button>
+          {(save.isError || remove.isError) && (
+            <p className="text-sm text-danger">
+              {((save.error ?? remove.error) as Error).message}
+            </p>
           )}
           <Button variant="ghost" onClick={onClose}>
             Отмена

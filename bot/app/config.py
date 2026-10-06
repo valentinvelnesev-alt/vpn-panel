@@ -172,6 +172,11 @@ class Config:
     allow_multiple_subscriptions: bool = False
     # Кнопки, скрытые админом в панели (ключи — keyboards.MENU_BUTTONS).
     menu_hidden: frozenset[str] = frozenset()
+    menu_columns: int = 1
+    menu_styles: dict[str, str] = field(default_factory=dict)
+    # "keyboard" — «Меню»/«Помощь» под полем ввода, "commands" — кнопка меню
+    # Telegram слева от поля.
+    menu_mode: str = "keyboard"
 
     # Только общие тарифы: персональные читаются под конкретного клиента.
     plans: list[PlanView] = field(default_factory=list)
@@ -351,6 +356,9 @@ async def load(db: AsyncSession) -> Config:
         discount_until=row.discount_until,
         allow_multiple_subscriptions=row.allow_multiple_subscriptions,
         menu_hidden=frozenset(row.menu_hidden or []),
+        menu_columns=min(max(int(row.menu_columns or 1), 1), 3),
+        menu_styles=dict(row.menu_styles or {}),
+        menu_mode=row.menu_mode or "keyboard",
         plans=[plan_view(p) for p in plans],
         traffic_packages=[traffic_view(p) for p in packages],
         remnawave_url=raw.get("remnawave_url"),

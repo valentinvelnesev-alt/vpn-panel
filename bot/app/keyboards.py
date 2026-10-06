@@ -11,6 +11,7 @@ from typing import Any
 
 from aiogram.types import (
     CopyTextButton,
+    ReplyKeyboardRemove,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -41,6 +42,14 @@ MENU_BUTTONS: dict[str, str] = {
     "help": "Помощь (кнопка под полем ввода)",
     "history": "История покупок",
 }
+
+
+def bottom_keyboard(config: Config) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    """Что поставить под полем ввода. В режиме «кнопка меню слева» прежнюю
+    клавиатуру нужно явно убрать: иначе она так и висит у клиентов."""
+    if config.menu_mode == "commands":
+        return ReplyKeyboardRemove()
+    return reply_menu(config)
 
 
 def reply_menu(config: Config | None = None) -> ReplyKeyboardMarkup:
@@ -86,6 +95,18 @@ def _markup(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 
 # ── Главное меню ──────────────────────────────────────────────────────
+# Цвет кнопок по умолчанию; админ переопределяет в панели (menu_styles),
+# "none" там — «без цвета».
+DEFAULT_STYLES: dict[str, str] = {"trial": "success", "referral": "success"}
+
+
+def menu_style(config: Config, key: str) -> str | None:
+    chosen = config.menu_styles.get(key)
+    if chosen is None:
+        return DEFAULT_STYLES.get(key)
+    return None if chosen == "none" else chosen
+
+
 def main_menu(
     config: Config,
     *,
@@ -94,57 +115,56 @@ def main_menu(
     balance_kopeks: int,
 ) -> InlineKeyboardMarkup:
     """Порядок как в исходном боте: покупка, подписки, подключение,
-    кабинет, баланс, рефералка, промокод, канал и поддержка.
+    кабинет, баланс, рефералка, промокод, канал и поддержка. Сколько
+    кнопок в ряд (1–3) и их цвет задаются в панели.
 
     Нет ни одного ключа — «Купить подписку». Есть — «Продлить подписку»:
     раньше «Купить» при живой подписке заводил второй ключ вместо продления.
     Отдельный новый ключ — «Купить ещё одну», если это разрешено в панели.
     """
-    rows: list[list[InlineKeyboardButton]] = []
+    items: list[tuple[str, str, dict]] = []  # (ключ, подпись, параметры кнопки)
     if trial_available and config.shows("trial"):
-        rows.append(
-            [_btn(config, "Попробовать бесплатно", callback_data="trial", icon="trial", style="success")]
-        )
+        items.append(("trial", "Попробовать бесплатно", {"callback_data": "trial", "icon": "trial"}))
 
     if has_subscription:
-        rows.append([_btn(config, "Продлить подписку", callback_data="renew", icon="clock")])
+        items.append(("buy", "Продлить подписку", {"callback_data": "renew", "icon": "clock"}))
         if config.allow_multiple_subscriptions:
-            rows.append([_btn(config, "Купить ещё одну", callback_data="plans_new", icon="buy")])
+            items.append(("buy_more", "Купить ещё одну", {"callback_data": "plans_new", "icon": "buy"}))
         if config.shows("subscriptions"):
-            rows.append([_btn(config, "Подписка", callback_data="my_subscriptions", icon="subscription")])
+            items.append(
+                ("subscriptions", "Подписка", {"callback_data": "my_subscriptions", "icon": "subscription"})
+            )
         # «Подключиться» без единого ключа вело бы в тупик — прячем.
         if config.shows("connect"):
-            rows.append([_btn(config, "Подключиться", callback_data="connect", icon="connect")])
+            items.append(("connect", "Подключиться", {"callback_data": "connect", "icon": "connect"}))
     else:
-        rows.append([_btn(config, "Купить подписку", callback_data="plans", icon="buy")])
+        items.append(("buy", "Купить подписку", {"callback_data": "plans", "icon": "buy"}))
 
     if config.shows("profile"):
-        rows.append([_btn(config, "Личный кабинет", callback_data="profile", icon="profile")])
+        items.append(("profile", "Личный кабинет", {"callback_data": "profile", "icon": "profile"}))
     if config.shows("balance"):
-        rows.append(
-            [
-                _btn(
-                    config,
-                    f"Баланс: {format_rub(balance_kopeks)}",
-                    callback_data="wallet",
-                    icon="balance",
-                )
-            ]
+        items.append(
+            ("balance", f"Баланс: {format_rub(balance_kopeks)}", {"callback_data": "wallet", "icon": "balance"})
         )
-
     if config.referral_visible and config.shows("referral"):
-        rows.append([_btn(config, "Рефералка", callback_data="referral", icon="referral", style="success")])
-
+        items.append(("referral", "Рефералка", {"callback_data": "referral", "icon": "referral"}))
     if config.shows("promo"):
-        rows.append([_btn(config, "Промокод", callback_data="promo", icon="promo")])
-
-    last: list[InlineKeyboardButton] = []
+        items.append(("promo", "Промокод", {"callback_data": "promo", "icon": "promo"}))
     if config.channel_url and config.shows("channel"):
-        last.append(_btn(config, "Наш канал", url=config.channel_url, icon="channel"))
+        items.append(("channel", "Наш канал", {"url": config.channel_url, "icon": "channel"}))
     if config.support_url and config.shows("support"):
-        last.append(_btn(config, "Поддержка", url=config.support_url, icon="support"))
-    rows.append(last)
-    return _markup(rows)
+        items.append(("support", "Поддержка", {"url": config.support_url, "icon": "support"}))
+
+    buttons = [
+        _btn(config, text, style=menu_style(config, key), **params) for key, text, params in items
+    ]
+    if config.menu_columns == 1:
+        # Канал и поддержка — короткие, рядом друг с другом, как раньше.
+        tail = [b for (key, _, _), b in zip(items, buttons, strict=True) if key in ("channel", "support")]
+        head = [b for (key, _, _), b in zip(items, buttons, strict=True) if key not in ("channel", "support")]
+        return _markup([[b] for b in head] + [tail])
+    step = config.menu_columns
+    return _markup([buttons[i : i + step] for i in range(0, len(buttons), step)])
 
 
 def back_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:
@@ -364,7 +384,12 @@ def subscription_detail_menu(
     автоматически нечем, переключатель не показываем."""
     rows = [[_btn(config, "Продлить", callback_data=f"renewsub:{subscription_id}", icon="clock")]]
     if has_url:
-        rows.append([_btn(config, "Подключиться", callback_data=f"connect:{subscription_id}", icon="connect")])
+        rows.append(
+            [
+                _btn(config, "Подключиться", callback_data=f"connect:{subscription_id}", icon="connect"),
+                _btn(config, "QR-код", callback_data=f"qr:{subscription_id}", icon="link"),
+            ]
+        )
     if auto_renew is not None:
         rows.append(
             [

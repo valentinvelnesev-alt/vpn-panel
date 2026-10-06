@@ -2,25 +2,42 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Play, Square, XCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input, Textarea } from '@/components/ui'
-import { panel, type BotStatus, type BotSettings } from '@/lib/api'
+import { panel, type BotSettings, type BotStatus, type ButtonStyle } from '@/lib/api'
 import BotPlans from './BotPlans'
 import BotTraffic from './BotTraffic'
 import BotPromo from './BotPromo'
 import BotReferral from './BotReferral'
 
 // Совпадает с MENU_BUTTONS в bot/app/keyboards.py.
-const MENU_BUTTONS: [string, string][] = [
-  ['trial', 'Попробовать бесплатно'],
-  ['subscriptions', 'Подписка'],
-  ['connect', 'Подключиться'],
-  ['profile', 'Личный кабинет'],
-  ['balance', 'Баланс и пополнение'],
-  ['referral', 'Рефералка'],
-  ['promo', 'Промокод'],
-  ['channel', 'Наш канал'],
-  ['support', 'Поддержка'],
-  ['help', '«Помощь» под полем ввода и /help'],
-  ['history', 'История покупок (в кабинете)'],
+// Совпадает с MENU_BUTTONS в bot/app/keyboards.py. Третий элемент — можно
+// ли кнопку скрыть (покупку/продление скрывать нельзя).
+const MENU_BUTTONS: [string, string, boolean][] = [
+  ['trial', 'Попробовать бесплатно', true],
+  ['buy', 'Купить / Продлить подписку', false],
+  ['buy_more', 'Купить ещё одну', false],
+  ['subscriptions', 'Подписка', true],
+  ['connect', 'Подключиться', true],
+  ['profile', 'Личный кабинет', true],
+  ['balance', 'Баланс и пополнение', true],
+  ['referral', 'Рефералка', true],
+  ['promo', 'Промокод', true],
+  ['channel', 'Наш канал', true],
+  ['support', 'Поддержка', true],
+  ['help', '«Помощь» и /help', true],
+  ['history', 'История покупок (в кабинете)', true],
+]
+
+// Кнопки, у которых в боте есть цвет (у «Помощи» и истории его нет).
+const COLORABLE = new Set([
+  'trial', 'buy', 'buy_more', 'subscriptions', 'connect', 'profile', 'balance',
+  'referral', 'promo', 'channel', 'support',
+])
+const DEFAULT_STYLES: Record<string, ButtonStyle> = { trial: 'success', referral: 'success' }
+const STYLE_OPTIONS: [ButtonStyle, string, string][] = [
+  ['none', 'Обычная', 'bg-surface-hover'],
+  ['primary', 'Синяя', 'bg-sky-500'],
+  ['success', 'Зелёная', 'bg-emerald-500'],
+  ['danger', 'Красная', 'bg-rose-500'],
 ]
 
 const STATE_LABEL: Record<BotStatus['state'], [string, string]> = {
@@ -470,19 +487,91 @@ function SettingsCard({ status }: { status: BotStatus }) {
             Снимите галочку, чтобы спрятать кнопку у клиентов. Кнопки канала и поддержки
             показываются, только если для них указана ссылка.
           </p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            {MENU_BUTTONS.map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="size-4"
-                  checked={!form.menu_hidden.includes(key)}
-                  onChange={() => toggleMenu(key)}
-                />
-                {label}
-              </label>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted">Кнопок в ряд:</span>
+            {[1, 2, 3].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => set('menu_columns', n)}
+                className={`size-9 rounded-full border text-sm transition-colors ${
+                  form.menu_columns === n
+                    ? 'border-accent bg-accent/10 font-medium text-accent'
+                    : 'border-border/60 hover:bg-surface-hover'
+                }`}
+              >
+                {n}
+              </button>
             ))}
           </div>
+          <div className="mt-3 divide-y divide-border/60 rounded-2xl border border-border/60">
+            {MENU_BUTTONS.map(([key, label, hideable]) => (
+              <div key={key} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    checked={!form.menu_hidden.includes(key)}
+                    disabled={!hideable}
+                    onChange={() => toggleMenu(key)}
+                  />
+                  {label}
+                </label>
+                {COLORABLE.has(key) && (
+                  <div className="flex gap-1" role="radiogroup" aria-label={`Цвет: ${label}`}>
+                    {STYLE_OPTIONS.map(([style, title, swatch]) => {
+                      const current = form.menu_styles[key] ?? DEFAULT_STYLES[key] ?? 'none'
+                      return (
+                        <button
+                          key={style}
+                          type="button"
+                          title={title}
+                          aria-label={title}
+                          onClick={() => set('menu_styles', { ...form.menu_styles, [key]: style })}
+                          className={`size-6 rounded-full border-2 ${swatch} ${
+                            current === style ? 'border-fg' : 'border-transparent opacity-60'
+                          }`}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <span className="text-sm font-medium">Кнопки «Меню» и «Помощь»</span>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {(
+              [
+                ['keyboard', 'Под полем ввода', 'Клавиатура из двух кнопок под строкой сообщения.'],
+                [
+                  'commands',
+                  'В кнопке меню слева от поля',
+                  'Кнопка «Меню» Telegram рядом с полем ввода — не перекрывает жест «назад» на телефоне.',
+                ],
+              ] as const
+            ).map(([mode, title, hint]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => set('menu_mode', mode)}
+                className={`rounded-2xl border px-3 py-2 text-left text-sm transition-colors ${
+                  form.menu_mode === mode
+                    ? 'border-accent bg-accent/10'
+                    : 'border-border/60 hover:bg-surface-hover'
+                }`}
+              >
+                <span className="font-medium">{title}</span>
+                <span className="mt-0.5 block text-xs text-muted">{hint}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            У клиентов клавиатура сменится, когда они в следующий раз нажмут /start или «Меню».
+          </p>
         </div>
 
         <label className="flex items-start gap-2 text-sm">

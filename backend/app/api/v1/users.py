@@ -8,7 +8,7 @@ from shared.db.models import AuditLog
 from app.services import cache
 from app.services.remnawave_provider import Remnawave
 from shared.remnawave import RemnawaveError, User
-from shared.sync import stored_ref, sync_from_remote
+from shared.sync import forget_remote_key, stored_ref, sync_from_remote
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -233,6 +233,39 @@ async def get_user(user_ref: str, admin: CurrentAdmin, client: Remnawave) -> Use
 
 class ExtendIn(BaseModel):
     days: int = Field(ge=1, le=3650)
+
+
+@router.delete("/{user_ref}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_ref: str,
+    admin: CurrentAdmin,
+    db: DbSession,
+    client: Remnawave,
+    request: Request,
+) -> None:
+    """Удаляет пользователя в Remnawave. Если это ключ клиента бота — он
+    пропадает и из «Мои подписки», а сводка клиента пересчитывается."""
+    ref = stored_ref(user_ref)
+    try:
+        await client.delete_user(ref)
+    except RemnawaveError as exc:
+        if exc.status_code != 404:  # уже удалён — дочищаем у себя
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    await forget_remote_key(
+        db,
+        remnawave_id=ref if isinstance(ref, int) else None,
+        remnawave_uuid=ref if isinstance(ref, str) else None,
+    )
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="user.delete",
+            target=user_ref,
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    await cache.invalidate("dashboard:overview")
 
 
 @router.post("/{user_ref}/extend", response_model=UserOut)

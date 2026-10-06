@@ -220,6 +220,55 @@ function PersonalPlans({ client }: { client: ClientDetail }) {
   )
 }
 
+function DeleteClient({ client, onDeleted }: { client: ClientDetail; onDeleted: () => void }) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [withKeys, setWithKeys] = useState(true)
+  const remove = useMutation({
+    mutationFn: () => panel.deleteClient(client.id, withKeys),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      onDeleted()
+    },
+  })
+
+  if (!open) {
+    return (
+      <Button variant="ghost" className="text-danger" onClick={() => setOpen(true)}>
+        <Trash2 className="size-4" />
+        Удалить клиента
+      </Button>
+    )
+  }
+  return (
+    <div className="space-y-3 rounded-2xl border border-danger/40 p-4">
+      <p className="text-sm">
+        Будут удалены баланс, история, персональные тарифы и ключи клиента в боте. Если он
+        снова напишет боту — появится как новый.
+      </p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="size-4"
+          checked={withKeys}
+          onChange={(e) => setWithKeys(e.target.checked)}
+        />
+        Удалить и его ключи в Remnawave ({client.subscriptions_list.length}) — VPN перестанет
+        работать
+      </label>
+      {remove.isError && <p className="text-sm text-danger">{(remove.error as Error).message}</p>}
+      <div className="flex gap-2">
+        <Button variant="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
+          {remove.isPending ? 'Удаляю…' : 'Удалить навсегда'}
+        </Button>
+        <Button variant="ghost" onClick={() => setOpen(false)}>
+          Отмена
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function ClientModal({ id, onClose }: { id: number; onClose: () => void }) {
   const { data: client, isPending } = useQuery({
     queryKey: ['client', id],
@@ -320,6 +369,10 @@ function ClientModal({ id, onClose }: { id: number; onClose: () => void }) {
               </ul>
             )}
           </Section>
+
+          <div className="lg:col-span-2">
+            <DeleteClient client={client} onDeleted={onClose} />
+          </div>
 
           <Section title="Покупки">
             {client.purchases.length === 0 ? (

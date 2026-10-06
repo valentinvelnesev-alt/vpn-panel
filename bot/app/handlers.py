@@ -325,7 +325,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
     # Telegram не разрешает и inline-кнопки, и клавиатуру под полем ввода.
     await message.answer(
         t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
-        reply_markup=keyboards.reply_menu(config),
+        reply_markup=keyboards.bottom_keyboard(config),
     )
     await _show_menu(message, config)
 
@@ -345,7 +345,7 @@ async def on_help_button(message: Message, config: Config, state: FSMContext) ->
         # Кнопку скрыли в панели, а у клиента ещё старая клавиатура —
         # показываем меню вместе с уже обновлённой клавиатурой.
         await message.answer(t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
-                             reply_markup=keyboards.reply_menu(config))
+                             reply_markup=keyboards.bottom_keyboard(config))
         await _show_menu(message, config)
         return
     if config.support_url:
@@ -377,11 +377,15 @@ async def cb_check_sub(callback: CallbackQuery, config: Config, bot: Bot) -> Non
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, config: Config) -> None:
-    if not config.shows("help"):
-        await _show_menu(message, config)
-        return
-    await message.answer(t(config, texts.HELP))
+async def cmd_help(message: Message, config: Config, state: FSMContext) -> None:
+    # Та же «Помощь», что и кнопка под полем ввода: в режиме кнопки меню
+    # Telegram слева от поля она открывается командой /help.
+    await on_help_button(message, config, state)
+
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, config: Config, state: FSMContext) -> None:
+    await on_menu_button(message, config, state)
 
 
 # ── Подписка ──────────────────────────────────────────────────────────
@@ -1448,6 +1452,41 @@ async def _render_instruction(
             via_redirect=config.subscription_redirect,
         ),
         disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+def qr_png(data: str) -> bytes:
+    """QR-код ссылки подписки картинкой — его сканируют приложением на
+    телевизоре или втором телефоне, где ссылку неудобно вводить руками."""
+    import io
+
+    import qrcode
+
+    image = qrcode.make(data, box_size=10, border=3)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@router.callback_query(F.data.startswith("qr:"))
+async def cb_qr(callback: CallbackQuery, config: Config) -> None:
+    from aiogram.types import BufferedInputFile
+
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+        url = subscription.subscription_url if subscription else None
+    if not url:
+        await callback.answer("Ссылка подписки не найдена", show_alert=True)
+        return
+
+    # Отдельным сообщением, а не правкой экрана: QR остаётся в чате, его
+    # можно открыть и отсканировать в любой момент.
+    await callback.message.answer_photo(
+        BufferedInputFile(qr_png(url), filename="subscription-qr.png"),
+        caption=t(config, "{@link} <b>QR-код подписки</b>\n\n<code>{url}</code>", url=url),
+        reply_markup=keyboards.back_to_menu(config),
     )
     await callback.answer()
 

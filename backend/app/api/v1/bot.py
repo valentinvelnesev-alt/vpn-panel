@@ -1,6 +1,7 @@
 import os
 import uuid as uuid_lib
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
@@ -85,6 +86,9 @@ class BotStatusOut(BaseModel):
     menu_photo_url: str | None
     allow_multiple_subscriptions: bool
     menu_hidden: list[str]
+    menu_columns: int
+    menu_styles: dict[str, str]
+    menu_mode: str
     discount_percent: int
     discount_until: datetime | None
 
@@ -124,6 +128,9 @@ def _status(row: BotConfig) -> BotStatusOut:
         ),
         allow_multiple_subscriptions=row.allow_multiple_subscriptions,
         menu_hidden=list(row.menu_hidden or []),
+        menu_columns=row.menu_columns or 1,
+        menu_styles=dict(row.menu_styles or {}),
+        menu_mode=row.menu_mode or "keyboard",
         discount_percent=row.discount_percent or 0,
         discount_until=row.discount_until,
     )
@@ -258,6 +265,16 @@ class BotSettingsIn(BaseModel):
     allow_multiple_subscriptions: bool = False
     # Скрытые кнопки меню — ключи из MENU_BUTTONS (bot/app/keyboards.py).
     menu_hidden: list[str] = Field(default_factory=list, max_length=32)
+    # Сколько кнопок главного меню в ряд.
+    menu_columns: int = Field(default=1, ge=1, le=3)
+    # Цвет кнопки: primary (синий), success (зелёный), danger (красный),
+    # none — без цвета. Других стилей Telegram не принимает вовсе.
+    menu_styles: dict[str, Literal["primary", "success", "danger", "none"]] = Field(
+        default_factory=dict
+    )
+    # keyboard — «Меню»/«Помощь» под полем ввода; commands — кнопка меню
+    # Telegram слева от поля (не перекрывает жест «назад»).
+    menu_mode: Literal["keyboard", "commands"] = "keyboard"
 
     @field_validator(
         "support_url", "channel_url", "channel_id", "welcome_text",

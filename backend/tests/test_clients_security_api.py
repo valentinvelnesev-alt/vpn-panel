@@ -375,3 +375,85 @@ def test_premium_emoji_toggle_uses_builtin_icons(client: TestClient, monkeypatch
 
     body = client.put("/api/v1/bot/emoji", json={"mode": "plain"}).json()
     assert body["status"]["emoji_mode"] == "plain"
+
+
+# ── 1.6.1: удаление, раскладка меню ───────────────────────────────────
+async def test_delete_client_keeps_data_when_remnawave_fails(client: TestClient, monkeypatch) -> None:
+    from app.services import remnawave_provider
+    from shared.db.models import BotSubscription
+    from shared.remnawave import RemnawaveError
+
+    client_id = await _make_client()
+    async with SessionLocal() as db:
+        db.add(BotSubscription(user_id=client_id, remnawave_id=42, username="tg_555"))
+        await db.commit()
+
+    deleted = []
+
+    class FakeRemnawave:
+        fail = True
+
+        async def delete_user(self, ref):
+            if self.fail:
+                raise RemnawaveError("boom", 500)
+            deleted.append(ref)
+
+    fake = FakeRemnawave()
+
+    async def fake_client(db):
+        return fake
+
+    monkeypatch.setattr(remnawave_provider, "get_client", fake_client)
+    r = client.delete(f"/api/v1/bot/clients/{client_id}")
+    assert r.status_code == 502
+    assert client.get(f"/api/v1/bot/clients/{client_id}").status_code == 200
+
+    fake.fail = False
+    assert client.delete(f"/api/v1/bot/clients/{client_id}").status_code == 204
+    assert deleted == [42]
+    assert client.get(f"/api/v1/bot/clients/{client_id}").status_code == 404
+
+
+async def test_delete_client_without_keys(client: TestClient) -> None:
+    client_id = await _make_client()
+    r = client.delete(f"/api/v1/bot/clients/{client_id}", params={"with_keys": "false"})
+    assert r.status_code == 204
+
+
+async def test_forget_remote_key_clears_summary() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from shared.db.models import BotSubscription
+    from shared.sync import forget_remote_key
+
+    client_id = await _make_client()
+    async with SessionLocal() as db:
+        user = await db.get(BotUser, client_id)
+        db.add(
+            BotSubscription(
+                user_id=client_id, remnawave_id=7, username="k",
+                expire_at=datetime.now(UTC) + timedelta(days=5),
+            )
+        )
+        user.remnawave_uuid = "7"
+        user.expire_at = datetime.now(UTC) + timedelta(days=5)
+        await db.commit()
+
+        await forget_remote_key(db, remnawave_id=7)
+        await db.commit()
+        user = await db.get(BotUser, client_id)
+        assert user.remnawave_uuid is None and user.expire_at is None
+
+
+def test_menu_layout_settings_validation(client: TestClient) -> None:
+    status = client.get("/api/v1/bot").json()
+    base = {"trial_squad_uuids": status["trial_squad_uuids"]}
+    ok = client.put(
+        "/api/v1/bot/settings",
+        json={**base, "menu_columns": 2, "menu_styles": {"buy": "success"}, "menu_mode": "commands"},
+    ).json()
+    assert ok["menu_columns"] == 2 and ok["menu_styles"] == {"buy": "success"}
+    assert ok["menu_mode"] == "commands"
+    assert client.put("/api/v1/bot/settings", json={**base, "menu_columns": 4}).status_code == 422
+    bad_style = client.put("/api/v1/bot/settings", json={**base, "menu_styles": {"buy": "pink"}})
+    assert bad_style.status_code == 422

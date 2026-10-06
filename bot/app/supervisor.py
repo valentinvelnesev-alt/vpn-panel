@@ -128,6 +128,8 @@ class Supervisor:
             asyncio.create_task(node_alerts_worker()),
         ]
 
+        await self._apply_menu_button(bot, config)
+
         await self._set_state(
             BotState.RUNNING,
             None,
@@ -136,6 +138,27 @@ class Supervisor:
             bot_id=me.id,
         )
         log.info("Бот @%s запущен", me.username)
+
+    @staticmethod
+    async def _apply_menu_button(bot: Bot, config: config_module.Config) -> None:
+        """Кнопка меню Telegram слева от поля ввода — со списком команд
+        «Главное меню» и «Помощь». В обычном режиме убираем её, чтобы не
+        дублировала клавиатуру под полем ввода. Сбой здесь не мешает боту
+        работать — это только оформление."""
+        from aiogram.types import BotCommand, MenuButtonCommands, MenuButtonDefault
+
+        try:
+            if config.menu_mode == "commands":
+                commands = [BotCommand(command="menu", description="Главное меню")]
+                if config.shows("help"):
+                    commands.append(BotCommand(command="help", description="Помощь"))
+                await bot.set_my_commands(commands)
+                await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+            else:
+                await bot.delete_my_commands()
+                await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Не удалось настроить кнопку меню: %s", exc)
 
     async def _run(self, bot: Bot, dispatcher: Dispatcher) -> None:
         try:
@@ -230,8 +253,14 @@ class Supervisor:
                 and config.can_run
                 and config.token == self._config.token
             ):
+                previous = self._config
                 self._dispatcher["config"] = config
                 self._config = config
+                if self._bot is not None and (
+                    previous.menu_mode != config.menu_mode
+                    or previous.shows("help") != config.shows("help")
+                ):
+                    await self._apply_menu_button(self._bot, config)
                 log.info("Конфиг обновлён без перезапуска")
                 return
 

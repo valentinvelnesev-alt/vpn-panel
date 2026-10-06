@@ -204,3 +204,37 @@ async def test_wallet_payment_renews_with_discount(config, remote, monkeypatch) 
     assert len(keys) == 1  # продлили, а не завели второй ключ
     assert balance == 50000 - 29900
     assert "Оплачено с баланса" in callback.message.edit_text.await_args.args[0]
+
+
+# ── Раскладка, цвета, кнопка меню, QR (1.6.1) ─────────────────────────
+def test_menu_columns(config) -> None:
+    cfg = replace(config, menu_columns=2, support_url="https://t.me/s", channel_url="https://t.me/c")
+    rows = _menu(cfg, has_subscription=True).inline_keyboard
+    assert all(len(row) <= 2 for row in rows)
+    assert max(len(row) for row in rows) == 2
+    three = replace(cfg, menu_columns=3)
+    assert max(len(row) for row in _menu(three, has_subscription=True).inline_keyboard) == 3
+
+
+def test_menu_button_colors(config) -> None:
+    cfg = replace(config, menu_styles={"buy": "danger", "trial": "none"})
+    markup = keyboards.main_menu(
+        cfg, trial_available=True, has_subscription=False, balance_kopeks=0
+    )
+    by_data = {b.callback_data: b for b in _buttons(markup)}
+    assert by_data["plans"].style == "danger"
+    assert by_data["trial"].style is None  # «none» снимает цвет по умолчанию
+    assert by_data["promo"].style is None
+
+
+def test_commands_mode_removes_reply_keyboard(config) -> None:
+    from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+    assert isinstance(keyboards.bottom_keyboard(config), ReplyKeyboardMarkup)
+    assert isinstance(
+        keyboards.bottom_keyboard(replace(config, menu_mode="commands")), ReplyKeyboardRemove
+    )
+
+
+def test_qr_png() -> None:
+    assert handlers.qr_png("https://sub.example/abc").startswith(b"\x89PNG")

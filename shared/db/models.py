@@ -248,6 +248,15 @@ class BotConfig(Base, TimestampMixin):
     # Кнопки главного меню, которые админ скрыл в панели (см. MENU_BUTTONS
     # в bot/app/keyboards.py): "support", "promo", "profile", ...
     menu_hidden: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    # Сколько кнопок главного меню в ряд: 1, 2 или 3.
+    menu_columns: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Цвет кнопок меню: {"buy": "success", "promo": "none", ...}. Нет ключа —
+    # цвет по умолчанию из кода (см. keyboards.DEFAULT_STYLES).
+    menu_styles: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    # Где «Меню» и «Помощь»: "keyboard" — клавиатура под полем ввода,
+    # "commands" — кнопка меню Telegram слева от поля (не мешает жесту
+    # «назад» на телефоне).
+    menu_mode: Mapped[str] = mapped_column(String(16), default="keyboard", nullable=False)
 
 
 class PlanCategory(Base, TimestampMixin):

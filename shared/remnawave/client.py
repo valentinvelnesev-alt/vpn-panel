@@ -357,6 +357,9 @@ class RemnawaveClient:
             json={**self._bulk_field(refs), "activeInternalSquads": internal_squad_uuids},
         )
 
+    async def delete_user(self, ref: UserRef) -> None:
+        await self._request("DELETE", f"/api/users/{ref}")
+
     async def bulk_delete(self, refs: list[UserRef]) -> None:
         await self._post("/api/users/bulk/delete", json=self._bulk_field(refs))
 
