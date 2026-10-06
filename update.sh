@@ -23,12 +23,25 @@ die() { err "$1"; exit 1; }
 # содержимое может исказить оставшиеся команды). Поэтому один раз копируем
 # себя во временный файл и перезапускаемся уже из него — код на диске
 # после этого можно спокойно перезаписывать.
+#
+# При запуске через `curl … | bash` скрипта на диске нет вовсе: $0 — это
+# просто «bash», и `cp "$0"` падал с «cannot stat 'bash'» — официальная
+# команда обновления не работала. В этом случае скачиваем свою копию.
+# Плюс stdin перезапущенного скрипта — /dev/null: иначе docker compose run
+# читал бы из пайпа остаток скрипта.
+UPDATE_URL="${VPN_PANEL_UPDATE_URL:-https://raw.githubusercontent.com/valentinvelnesev-alt/vpn-panel/main/update.sh}"
 if [ -z "${VPN_PANEL_UPDATE_REEXEC:-}" ]; then
     TMP_SELF="$(mktemp /tmp/vpn-panel-update.XXXXXX.sh)"
-    cp "$0" "$TMP_SELF"
+    if [ -f "$0" ]; then
+        cp "$0" "$TMP_SELF"
+    elif ! curl -fsSL "$UPDATE_URL" -o "$TMP_SELF"; then
+        rm -f "$TMP_SELF"
+        printf '\033[0;31m  ✗ Не удалось скачать update.sh — проверьте доступ к GitHub\033[0m\n' >&2
+        exit 1
+    fi
     chmod +x "$TMP_SELF"
     export VPN_PANEL_UPDATE_REEXEC=1
-    exec bash "$TMP_SELF" "$@"
+    exec bash "$TMP_SELF" "$@" < /dev/null
 fi
 trap 'rm -f "$0"' EXIT
 
