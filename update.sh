@@ -92,8 +92,12 @@ if [ "$LOCAL" = "$REMOTE" ]; then
     exit 0
 fi
 
+# --no-pager: в интерактивном терминале git открывает less и ждёт
+# клавишу — снаружи это выглядит как зависание, а мобильный SSH-клиент
+# потом рвёт соединение. Список ограничен: после переписывания истории
+# старый коммит сервера не входит в новую, и LOCAL..REMOTE — вся история.
 inf "  Изменения:"
-git log --oneline "$LOCAL..$REMOTE"
+git --no-pager log --oneline -n 15 "$LOCAL..$REMOTE" 2>/dev/null || true
 echo
 
 # reset --hard, а не pull: локальные правки самого update.sh (например,
