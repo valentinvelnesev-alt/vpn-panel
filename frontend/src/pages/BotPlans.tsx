@@ -9,6 +9,7 @@ import {
   type PlanCategory,
   type PlanInput,
 } from '@/lib/api'
+import { usePanelTerms } from '@/lib/panelKind'
 
 const GIB = 1024 ** 3
 
@@ -41,7 +42,8 @@ export function PlanForm({
   error?: string | null
 }) {
   const [form, setForm] = useState(initial)
-  // Сквады подтягиваем из Remnawave, чтобы не вводить UUID руками.
+  const terms = usePanelTerms()
+  // Сквады (у 3x-ui — инбаунды) подтягиваем из панели, чтобы не вводить UUID руками.
   const { data: squads } = useQuery({ queryKey: ['squads'], queryFn: panel.squads })
   const { data: categories } = useQuery({
     queryKey: ['plan-categories'],
@@ -143,7 +145,7 @@ export function PlanForm({
       </div>
 
       <div>
-        <span className="text-sm font-medium">Сквады Remnawave</span>
+        <span className="text-sm font-medium">{terms.squadsOf}</span>
         {squads?.length ? (
           <div className="mt-2 flex flex-wrap gap-2">
             {squads.map((squad) => (
@@ -163,12 +165,12 @@ export function PlanForm({
           </div>
         ) : (
           <p className="mt-1 text-xs text-muted">
-            Сквады не загрузились — проверьте подключение к Remnawave.
+            {terms.squads} не загрузились — проверьте подключение к {terms.name}.
           </p>
         )}
         {form.squad_uuids.length === 0 && (
           <p className="mt-1 text-xs text-danger">
-            Не выбран ни один сквад — купившие этот тариф не получат доступ ни к одной ноде.
+            {terms.noSquad} — купившие этот тариф не получат доступ ни к одной ноде.
           </p>
         )}
       </div>

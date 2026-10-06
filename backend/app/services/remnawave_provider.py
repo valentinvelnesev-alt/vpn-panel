@@ -12,13 +12,13 @@ from typing import Annotated
 
 from app.api.deps import DbSession
 from app.services import settings_service as cfg
-from shared.remnawave import RemnawaveClient
+from shared.panel import PanelClient, make_client, panel_name
 
-_clients: dict[tuple[str, str, bool], RemnawaveClient] = {}
+_clients: dict[tuple[str, str, bool], PanelClient] = {}
 _lock = asyncio.Lock()
 
 
-async def get_client(db: DbSession) -> RemnawaveClient:
+async def get_client(db: DbSession) -> PanelClient:
     values = await cfg.get_many(
         db, cfg.REMNAWAVE_URL, cfg.REMNAWAVE_TOKEN, cfg.REMNAWAVE_VERIFY_TLS
     )
@@ -28,7 +28,7 @@ async def get_client(db: DbSession) -> RemnawaveClient:
     if not url or not token:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Remnawave не подключена — укажите адрес и токен в настройках",
+            detail=f"{panel_name()} не подключена — укажите адрес и токен в настройках",
         )
 
     verify_tls = values[cfg.REMNAWAVE_VERIFY_TLS] != "false"
@@ -41,7 +41,7 @@ async def get_client(db: DbSession) -> RemnawaveClient:
             for stale in _clients.values():
                 await stale.aclose()
             _clients.clear()
-            client = RemnawaveClient(url, token, verify_tls=verify_tls)
+            client = make_client(url, token, verify_tls=verify_tls)
             _clients[key] = client
     return client
 
@@ -53,4 +53,4 @@ async def close_all() -> None:
         _clients.clear()
 
 
-Remnawave = Annotated[RemnawaveClient, Depends(get_client)]
+Remnawave = Annotated[PanelClient, Depends(get_client)]

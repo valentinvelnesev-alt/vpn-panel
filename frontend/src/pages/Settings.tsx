@@ -13,6 +13,7 @@ import { auth, panel } from '@/lib/api'
 import { DEFAULT_TITLE } from '@/lib/brand'
 import { cn } from '@/lib/cn'
 import { setNavStyle, useNavStyle, type NavStyle } from '@/lib/navStyle'
+import { usePanelTerms } from '@/lib/panelKind'
 
 function AppearanceCard() {
   const current = useNavStyle()
@@ -310,7 +311,7 @@ function ImportCard() {
         присылает в Telegram, или database.sql / .json / .sqlite) и <b>STEALTHNET</b> (файл{' '}
         <code>stealthnet-backup-….sql</code> из раздела бэкапов). Чей это бэкап, панель поймёт
         сама. Перенесутся клиенты, баланс, рефералы и ключи — старые реферальные ссылки
-        продолжат работать. Бот должен быть подключён к той же Remnawave. Повторная загрузка
+        продолжат работать. Бот должен быть подключён к той же панели, где лежат ключи. Повторная загрузка
         ничего не задвоит.
       </p>
       <input
@@ -382,6 +383,7 @@ function ImportCard() {
 }
 
 export default function Settings() {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const { data: current } = useQuery({
     queryKey: ['settings', 'remnawave'],
@@ -435,16 +437,29 @@ export default function Settings() {
       <AppearanceCard />
 
       <Card>
-        <h2 className="font-medium">Подключение к Remnawave</h2>
+        <h2 className="font-medium">Подключение к {terms.name}</h2>
         <p className="mt-1 text-sm text-muted">
-          Панель берёт из Remnawave пользователей, ноды и статистику. Токен
-          создаётся в самой Remnawave, в разделе API-токенов.
+          {terms.is3xui ? (
+            <>
+              Панель берёт из 3x-ui клиентов, инбаунды и статистику. Нужна 3x-ui версии 3.0
+              или новее. Токен создаётся в самой 3x-ui: Настройки → Безопасность → API Token.
+            </>
+          ) : (
+            <>
+              Панель берёт из Remnawave пользователей, ноды и статистику. Токен создаётся в
+              самой Remnawave, в разделе API-токенов.
+            </>
+          )}
         </p>
 
         <form onSubmit={submit} className="mt-5 space-y-4">
           <Field
-            label="Адрес панели Remnawave"
-            hint="Например: https://panel.example.com. Если админка закрыта проверкой в nginx, вставьте ссылку вместе с секретным параметром — тем же, по которой открываете её сами."
+            label={`Адрес панели ${terms.name}`}
+            hint={
+              terms.is3xui
+                ? 'Адрес, по которому открываете 3x-ui, вместе с секретным путём: например https://vpn.example.com:2053/AbCdEf'
+                : 'Например: https://panel.example.com. Если админка закрыта проверкой в nginx, вставьте ссылку вместе с секретным параметром — тем же, по которой открываете её сами.'
+            }
           >
             <Input
               value={url}
@@ -481,7 +496,7 @@ export default function Settings() {
             />
             Проверять TLS-сертификат
             <span className="text-xs text-muted">
-              (снимите, только если у Remnawave самоподписанный сертификат)
+              (снимите, только если у {terms.name} самоподписанный сертификат)
             </span>
           </label>
 

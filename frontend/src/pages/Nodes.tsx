@@ -4,6 +4,7 @@ import { Button, Card } from '@/components/ui'
 import { panel, type Node } from '@/lib/api'
 import { countryFlag } from '@/lib/flag'
 import { bytes, dateTime, number, uptime } from '@/lib/format'
+import { usePanelTerms } from '@/lib/panelKind'
 
 function StatusDot({ node }: { node: Node }) {
   const [color, label] = node.disabled
@@ -23,6 +24,7 @@ function StatusDot({ node }: { node: Node }) {
 }
 
 export default function Nodes() {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const { data: nodes, isPending, error } = useQuery({
     queryKey: ['nodes'],
@@ -54,7 +56,7 @@ export default function Nodes() {
 
       {nodes.length === 0 && (
         <Card>
-          <p className="text-muted">В Remnawave пока нет ни одной ноды.</p>
+          <p className="text-muted">В {terms.name} пока нет ни одной ноды.</p>
         </Card>
       )}
 

@@ -14,6 +14,7 @@ import { Modal } from '@/components/Modal'
 import { Button, Field, Input } from '@/components/ui'
 import { panel, type PanelUser, type UserUpdate } from '@/lib/api'
 import { bytes, dateTime, untilExpiry } from '@/lib/format'
+import { usePanelTerms } from '@/lib/panelKind'
 
 const GIB = 1024 ** 3
 
@@ -118,6 +119,7 @@ function DevicesSection({ userId }: { userId: string }) {
 }
 
 export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => void }) {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const { data: squads } = useQuery({ queryKey: ['squads'], queryFn: panel.squads })
 
@@ -201,7 +203,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
             onClick={() => {
               if (
                 confirm(
-                  `Удалить пользователя «${user.username}» в Remnawave? Подписка перестанет работать, это нельзя отменить.`,
+                  `Удалить пользователя «${user.username}» в ${terms.name}? Подписка перестанет работать, это нельзя отменить.`,
                 )
               )
                 remove.mutate()
@@ -300,7 +302,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
           </Field>
 
           <div>
-            <span className="text-sm font-medium">Внутренние сквады</span>
+            <span className="text-sm font-medium">{terms.is3xui ? terms.squads : 'Внутренние сквады'}</span>
             {squads?.length ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {squads.map((squad) => (
@@ -319,7 +321,7 @@ export function UserEditor({ user, onClose }: { user: PanelUser; onClose: () => 
                 ))}
               </div>
             ) : (
-              <p className="mt-1 text-xs text-muted">Сквады не загрузились.</p>
+              <p className="mt-1 text-xs text-muted">{terms.squads} не загрузились.</p>
             )}
           </div>
         </Section>

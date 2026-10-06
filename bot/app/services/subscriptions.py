@@ -19,6 +19,7 @@ from app.services.notify import send_sales as notify_sales
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
 from shared.remnawave.models import User as RemoteUser
+from shared.panel import PanelClient, make_client, panel_name
 from shared.sync import refresh_user_summary, stored_ref
 
 log = logging.getLogger("bot.subscriptions")
@@ -28,10 +29,10 @@ class TrialUnavailable(Exception):
     """Причина отказа в пробном периоде — показывается пользователю как есть."""
 
 
-def client_for(config: Config) -> RemnawaveClient:
+def client_for(config: Config) -> PanelClient:
     if not config.remnawave_url or not config.remnawave_token:
-        raise RemnawaveError("Remnawave не подключена в панели")
-    return RemnawaveClient(
+        raise RemnawaveError(f"{panel_name()} не подключена в панели")
+    return make_client(
         config.remnawave_url, config.remnawave_token, verify_tls=config.remnawave_verify_tls
     )
 

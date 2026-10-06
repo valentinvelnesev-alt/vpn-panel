@@ -425,6 +425,7 @@ export interface RemnawaveSettings {
   verify_tls: boolean
   configured: boolean
   subscription_redirect_enabled: boolean
+  panel_type: 'remnawave' | '3xui'
 }
 
 export const panel = {

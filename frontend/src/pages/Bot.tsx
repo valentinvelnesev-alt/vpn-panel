@@ -7,6 +7,7 @@ import BotPlans from './BotPlans'
 import BotTraffic from './BotTraffic'
 import BotPromo from './BotPromo'
 import BotReferral from './BotReferral'
+import { usePanelTerms } from '@/lib/panelKind'
 
 // Совпадает с MENU_BUTTONS в bot/app/keyboards.py.
 // Совпадает с MENU_BUTTONS в bot/app/keyboards.py. Третий элемент — можно
@@ -301,6 +302,7 @@ function EmojiCard({ status }: { status: BotStatus }) {
 }
 
 function SettingsCard({ status }: { status: BotStatus }) {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const [form, setForm] = useState<BotSettings>(status)
   const { data: squads } = useQuery({ queryKey: ['squads'], queryFn: panel.squads })
@@ -447,7 +449,7 @@ function SettingsCard({ status }: { status: BotStatus }) {
 
         {form.trial_enabled && (
           <div>
-            <span className="text-sm font-medium">Сквады Remnawave для триала</span>
+            <span className="text-sm font-medium">{terms.squadsOf} для триала</span>
             {squads?.length ? (
               <div className="mt-2 flex flex-wrap gap-2">
                 {squads.map((squad) => (
@@ -467,12 +469,12 @@ function SettingsCard({ status }: { status: BotStatus }) {
               </div>
             ) : (
               <p className="mt-1 text-xs text-muted">
-                Сквады не загрузились — проверьте подключение к Remnawave.
+                {terms.squads} не загрузились — проверьте подключение к {terms.name}.
               </p>
             )}
             {form.trial_squad_uuids.length === 0 && (
               <p className="mt-1 text-xs text-danger">
-                Не выбран ни один сквад — триал-подписки будут создаваться без доступа
+                {terms.noSquad} — триал-подписки будут создаваться без доступа
                 ни к одной ноде.
               </p>
             )}

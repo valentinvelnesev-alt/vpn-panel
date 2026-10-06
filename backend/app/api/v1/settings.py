@@ -8,7 +8,8 @@ from shared.db.models import AuditLog
 from app.core.security import mask
 from app.services import remnawave_provider
 from app.services import settings_service as cfg
-from shared.remnawave import RemnawaveClient, RemnawaveError
+from shared.panel import make_client, panel_type
+from shared.remnawave import RemnawaveError
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -19,6 +20,9 @@ class RemnawaveSettingsOut(BaseModel):
     verify_tls: bool
     configured: bool
     subscription_redirect_enabled: bool = False
+    # Тип панели задаётся при установке (PANEL_TYPE в .env): UI по нему
+    # подписывает поля и называет сквады инбаундами.
+    panel_type: str = "remnawave"
 
 
 class RemnawaveSettingsIn(BaseModel):
@@ -51,6 +55,7 @@ async def get_remnawave(admin: CurrentAdmin, db: DbSession) -> RemnawaveSettings
         verify_tls=values[cfg.REMNAWAVE_VERIFY_TLS] != "false",
         configured=bool(values[cfg.REMNAWAVE_URL] and token),
         subscription_redirect_enabled=values[cfg.SUBSCRIPTION_REDIRECT_ENABLED] == "true",
+        panel_type=panel_type(),
     )
 
 
@@ -96,7 +101,7 @@ async def check_remnawave(
     if not token:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Укажите токен")
 
-    client = RemnawaveClient(str(data.url), token, verify_tls=data.verify_tls)
+    client = make_client(str(data.url), token, verify_tls=data.verify_tls)
     try:
         meta = await client.check_connection()
     except RemnawaveError as exc:

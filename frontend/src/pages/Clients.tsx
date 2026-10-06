@@ -6,6 +6,7 @@ import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type ClientDetail, type ClientRow, type PlanInput } from '@/lib/api'
 import { dateTime, number, untilExpiry } from '@/lib/format'
 import { EMPTY_PLAN, PlanForm } from './BotPlans'
+import { usePanelTerms } from '@/lib/panelKind'
 
 const PAGE_SIZE = 50
 
@@ -134,6 +135,7 @@ function BalanceForm({ client }: { client: ClientDetail }) {
 }
 
 function PersonalPlans({ client }: { client: ClientDetail }) {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<number | 'new' | null>(null)
   const refresh = () => {
@@ -159,7 +161,7 @@ function PersonalPlans({ client }: { client: ClientDetail }) {
     <>
       <p className="text-xs text-muted">
         Видны в боте только этому клиенту — сверху списка тарифов, со звёздочкой. Своя цена,
-        срок, сквады и лимит устройств. Общая скидка на них не действует.
+        срок, {terms.squads.toLowerCase()} и лимит устройств. Общая скидка на них не действует.
       </p>
       {client.personal_plans.map((plan) =>
         editing === plan.id ? (
@@ -221,6 +223,7 @@ function PersonalPlans({ client }: { client: ClientDetail }) {
 }
 
 function DeleteClient({ client, onDeleted }: { client: ClientDetail; onDeleted: () => void }) {
+  const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [withKeys, setWithKeys] = useState(true)
@@ -253,7 +256,7 @@ function DeleteClient({ client, onDeleted }: { client: ClientDetail; onDeleted: 
           checked={withKeys}
           onChange={(e) => setWithKeys(e.target.checked)}
         />
-        Удалить и его ключи в Remnawave ({client.subscriptions_list.length}) — VPN перестанет
+        Удалить и его ключи в {terms.name} ({client.subscriptions_list.length}) — VPN перестанет
         работать
       </label>
       {remove.isError && <p className="text-sm text-danger">{(remove.error as Error).message}</p>}

@@ -16,6 +16,7 @@ import { Card } from '@/components/ui'
 import { panel, type NodeLoad, type Overview } from '@/lib/api'
 import { countryFlag } from '@/lib/flag'
 import { bytes, number } from '@/lib/format'
+import { usePanelTerms } from '@/lib/panelKind'
 
 function Stat({
   icon,
@@ -148,6 +149,7 @@ function NodesLoad({ nodes }: { nodes: NodeLoad[] }) {
 }
 
 export default function Dashboard() {
+  const terms = usePanelTerms()
   const { data, isPending } = useQuery({
     queryKey: ['overview'],
     queryFn: panel.overview,
@@ -161,10 +163,10 @@ export default function Dashboard() {
     <div className="space-y-4">
       {!data.configured && (
         <Card>
-          <h2 className="font-medium">Подключите Remnawave</h2>
+          <h2 className="font-medium">Подключите {terms.name}</h2>
           <p className="mt-1 text-sm text-muted">
             Панель пока не знает, откуда брать данные о нодах и пользователях.
-            Укажите адрес и токен вашей Remnawave.
+            Укажите адрес и токен вашей {terms.name}.
           </p>
           <Link
             to="/settings"
@@ -180,7 +182,7 @@ export default function Dashboard() {
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
             <div>
-              <p className="text-sm font-medium">Remnawave не отвечает</p>
+              <p className="text-sm font-medium">{terms.name} не отвечает</p>
               <p className="mt-0.5 text-sm text-muted">{data.error}</p>
             </div>
           </div>
