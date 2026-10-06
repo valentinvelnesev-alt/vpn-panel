@@ -62,6 +62,7 @@ from shared.db.models import (
 )
 from shared.db.session import session
 from shared.remnawave import RemnawaveClient, RemnawaveError
+from shared.sync import stored_ref
 
 log = logging.getLogger("bot.handlers")
 
@@ -424,10 +425,10 @@ async def _show_subscription(target: Message | CallbackQuery, config: Config) ->
     if active:
         text = t(
             config,
-            texts.SUBSCRIPTION_ACTIVE,
+            texts.SUBSCRIPTION_ACTIVE if url else texts.SUBSCRIPTION_ACTIVE_CONFIG,
             until=_date(expire_at),
             left=_left(expire_at),
-            url=url or "—",
+            url=url,
         )
     else:
         text = t(config, texts.SUBSCRIPTION_NONE)
@@ -464,20 +465,26 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
             )
             return
         expire_at, url = user.expire_at, user.subscription_url
+        remote_ref = stored_ref(user.remnawave_uuid)
 
+    # Клиент только на WireGuard/AmneziaWG: ссылки подписки у него нет,
+    # вместо неё — файл конфигурации.
+    files = [] if url or remote_ref is None else await subs.config_files(config, remote_ref)
     await screen(
         callback.message,
         config,
         t(
             config,
-            texts.TRIAL_GRANTED,
+            texts.TRIAL_GRANTED_CONFIG if files else texts.TRIAL_GRANTED,
             days=_plural(config.trial_days, "день", "дня", "дней"),
             until=_date(expire_at),
             url=url or "—",
         ),
-        keyboards.back_to_menu(config),
+        None if files else keyboards.back_to_menu(config),
     )
     await callback.answer()
+    if files:
+        await _send_config_files(callback.message, config, files)
 
 
 # ── Тарифы ────────────────────────────────────────────────────────────
@@ -1257,6 +1264,38 @@ async def _remote_usage(config: Config, ref: int | str) -> tuple[int, int, int, 
     )
 
 
+async def _send_config_files(
+    message: Message, config: Config, files: list
+) -> None:
+    """Файлы WireGuard/AmneziaWG отдельными сообщениями-документами: роутеру
+    нужен именно .conf, а не ссылка."""
+    from aiogram.types import BufferedInputFile
+
+    for number, file in enumerate(files):
+        await message.answer_document(
+            BufferedInputFile(file.text.encode(), filename=file.filename),
+            caption=t(config, texts.CONFIG_CAPTION) if number == 0 else None,
+            reply_markup=keyboards.back_to_menu(config) if number == len(files) - 1 else None,
+        )
+
+
+@router.callback_query(F.data.startswith("cfg:"))
+async def cb_config(callback: CallbackQuery, config: Config) -> None:
+    subscription_id = int(callback.data.split(":", 1)[1])
+    async with session() as db:
+        subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
+        remote_ref = subscription.remote_ref if subscription else None
+    if remote_ref is None:
+        await callback.answer("Ключ не найден", show_alert=True)
+        return
+    files = await subs.config_files(config, remote_ref)
+    if not files:
+        await callback.answer("Конфиг сейчас недоступен, попробуйте позже", show_alert=True)
+        return
+    await _send_config_files(callback.message, config, files)
+    await callback.answer()
+
+
 async def _render_subscription(callback: CallbackQuery, config: Config, subscription_id: int) -> None:
     async with session() as db:
         subscription = await _get_own_subscription(db, callback.from_user.id, subscription_id)
@@ -1277,6 +1316,7 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
         f"Истекает: <b>{_date(expire_at)}</b> ({_left(expire_at)})",
     ]
 
+    files = await subs.config_files(config, remote_ref)
     usage = await _remote_usage(config, remote_ref)
     if usage is not None:
         used, limit, devices_used, devices_limit = usage
@@ -1296,6 +1336,14 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
             "Нажмите «Подключиться» — покажу, что делать на вашем устройстве.",
         ]
 
+    if files:
+        lines += [
+            "",
+            t(config, "{@link} <b>Конфигурация для подключения</b>"),
+            "Нажмите «Скачать конфиг» — пришлю файл .conf для роутера "
+            "или приложения WireGuard / AmneziaWG.",
+        ]
+
     auto_renew = auto_renew_on if plan_row is not None else None
     # Докупка трафика имеет смысл только там, где лимит вообще есть:
     # к безлимиту прибавлять нечего.
@@ -1312,6 +1360,7 @@ async def _render_subscription(callback: CallbackQuery, config: Config, subscrip
             has_url=bool(url),
             auto_renew=auto_renew,
             can_buy_traffic=can_buy_traffic,
+            has_config=bool(files),
         ),
     )
     await callback.answer()

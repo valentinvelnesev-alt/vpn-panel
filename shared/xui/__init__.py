@@ -1,3 +1,3 @@
-from .client import LOCAL_NODE, XuiClient, XuiError
+from .client import CONFIG_PROTOCOLS, LOCAL_NODE, ConfigFile, XuiClient, XuiError
 
-__all__ = ["LOCAL_NODE", "XuiClient", "XuiError"]
+__all__ = ["CONFIG_PROTOCOLS", "LOCAL_NODE", "ConfigFile", "XuiClient", "XuiError"]

@@ -379,6 +379,7 @@ def subscription_detail_menu(
     has_url: bool,
     auto_renew: bool | None = None,
     can_buy_traffic: bool = False,
+    has_config: bool = False,
 ) -> InlineKeyboardMarkup:
     """auto_renew=None — у ключа нет тарифа (пробный/бонусный), продлевать
     автоматически нечем, переключатель не показываем."""
@@ -389,6 +390,10 @@ def subscription_detail_menu(
                 _btn(config, "Подключиться", callback_data=f"connect:{subscription_id}", icon="connect"),
                 _btn(config, "QR-код", callback_data=f"qr:{subscription_id}", icon="link"),
             ]
+        )
+    if has_config:
+        rows.append(
+            [_btn(config, "Скачать конфиг", callback_data=f"cfg:{subscription_id}", icon="connect")]
         )
     if auto_renew is not None:
         rows.append(

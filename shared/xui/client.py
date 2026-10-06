@@ -20,10 +20,13 @@ HTTP 200 и success=false — `_request` превращает их в XuiError.
 Справочник API: https://docs.sanaei.dev/docs/reference/api/
 """
 
+import base64
 import logging
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 import httpx
 
@@ -53,6 +56,21 @@ _FAR_FUTURE = datetime(2099, 12, 31, tzinfo=UTC)
 # Xray на том же сервере. Чтобы дашборд и алерты не были пустыми, он
 # показывается отдельной нодой.
 LOCAL_NODE = "local"
+
+
+# Протоколы, которые 3x-ui отдаёт файлом конфигурации, а не ссылкой
+# подписки: их ставят на роутеры (Keenetic, OpenWrt, MikroTik), где нужен
+# именно .conf. Ссылка подписки у такого клиента бесполезна.
+CONFIG_PROTOCOLS = frozenset({"wireguard", "amneziawg"})
+
+
+@dataclass(frozen=True)
+class ConfigFile:
+    """Готовый файл конфигурации WireGuard/AmneziaWG для клиента."""
+
+    filename: str
+    text: str
+    protocol: str  # "wireguard" | "amneziawg"
 
 
 class XuiError(RemnawaveError):
@@ -147,7 +165,7 @@ class XuiClient:
         )
         self._sub_base: str | None = None
         self._sub_loaded = False
-        self._squad_names: dict[int, str] | None = None
+        self._inbounds: dict[int, tuple[str, str]] | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -233,17 +251,24 @@ class XuiClient:
         self._sub_loaded = True
         return self._sub_base
 
-    async def _inbound_names(self) -> dict[int, str]:
-        if self._squad_names is None:
+    async def _inbound_info(self) -> dict[int, tuple[str, str]]:
+        """id инбаунда → (название, протокол)."""
+        if self._inbounds is None:
             try:
                 items = await self._get("/panel/api/inbounds/options") or []
             except XuiError:
                 return {}
-            self._squad_names = {
-                int(i["id"]): i.get("remark") or i.get("tag") or f"inbound {i['id']}"
+            self._inbounds = {
+                int(i["id"]): (
+                    i.get("remark") or i.get("tag") or f"inbound {i['id']}",
+                    str(i.get("protocol") or "").lower(),
+                )
                 for i in items
             }
-        return self._squad_names
+        return self._inbounds
+
+    async def _inbound_names(self) -> dict[int, str]:
+        return {i: name for i, (name, _) in (await self._inbound_info()).items()}
 
     # ── Преобразование клиента 3x-ui в User ──────────────────────────
     async def _to_user(
@@ -275,10 +300,16 @@ class XuiClient:
         else:
             status = UserStatus.ACTIVE
 
-        names = await self._inbound_names()
+        info = await self._inbound_info()
+        names = {i: n for i, (n, _) in info.items()}
         sub_base = await self._subscription_base()
         sub_id = rec.get("subId")
         tg_id = rec.get("tgId") or None
+        # Клиент только на WireGuard/AmneziaWG получает файл конфигурации
+        # (get_config_files), а не ссылку подписки.
+        config_only = bool(inbound_ids) and all(
+            info.get(i, ("", ""))[1] in CONFIG_PROTOCOLS for i in inbound_ids
+        )
 
         return User(
             id=None,
@@ -294,7 +325,9 @@ class XuiClient:
             tag=rec.get("group") or None,
             hwidDeviceLimit=rec.get("limitHwid") or None,
             trafficLimitBytes=total,
-            subscriptionUrl=(sub_base + sub_id) if sub_base and sub_id else None,
+            subscriptionUrl=(sub_base + sub_id)
+            if sub_base and sub_id and not config_only
+            else None,
             createdAt=_ms(rec.get("createdAt")),
             activeInternalSquads=[
                 Squad(uuid=str(i), name=names.get(i, f"inbound {i}")) for i in inbound_ids
@@ -479,9 +512,35 @@ class XuiClient:
 
     # ── «Сквады» = инбаунды ───────────────────────────────────────────
     async def get_internal_squads(self) -> list[dict[str, Any]]:
-        self._squad_names = None
+        self._inbounds = None
         names = await self._inbound_names()
         return [{"uuid": str(i), "name": n} for i, n in sorted(names.items())]
+
+    # ── Конфигурации WireGuard / AmneziaWG ────────────────────────────
+    async def get_config_files(self, ref: UserRef) -> list[ConfigFile]:
+        """Файлы .conf для клиента на WireGuard/AmneziaWG-инбаундах.
+
+        Отдельного API для конфига у 3x-ui нет, но /clients/links отдаёт
+        готовые ссылки: для AmneziaWG это vpn://<base64 .conf> (текст
+        конфига внутри), для WireGuard — wireguard://<ключ>@хост:порт с
+        параметрами, из которых конфиг собирается здесь.
+        """
+        email = _ref(ref)
+        raw = await self._get(f"/panel/api/clients/links/{email}") or []
+        files: list[ConfigFile] = []
+        for link in "\n".join(raw).splitlines():
+            link = link.strip()
+            if link.startswith("vpn://"):
+                text, protocol = _decode_amnezia_link(link), "amneziawg"
+            elif link.startswith("wireguard://"):
+                text, protocol = _wireguard_config(link), "wireguard"
+            else:
+                continue
+            if text:
+                files.append(
+                    ConfigFile(_config_filename(email, protocol, len(files) + 1), text, protocol)
+                )
+        return files
 
     # ── Устройства (HWID) ─────────────────────────────────────────────
     async def get_devices(self, ref: UserRef) -> list[Device]:
@@ -617,3 +676,49 @@ class XuiClient:
             uptime=float(status.get("uptime") or 0),
             memory={"total": mem.get("total", 0), "used": mem.get("current", 0)},
         )
+
+
+# ── Разбор ссылок 3x-ui в конфигурации ────────────────────────────────
+def _decode_amnezia_link(link: str) -> str | None:
+    payload = link.removeprefix("vpn://")
+    try:
+        text = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return text if "[Interface]" in text else None
+
+
+def _wireguard_config(link: str) -> str | None:
+    """wireguard://<ключ>@хост:порт?publickey=…&address=…#имя → текст .conf."""
+    parts = urlsplit(link)
+    private_key = unquote(parts.username or "")
+    query = {k: unquote(v[0]) for k, v in parse_qs(parts.query, keep_blank_values=False).items()}
+    if not private_key or not parts.hostname or not parts.port or not query.get("publickey"):
+        return None
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+
+    lines = ["[Interface]", f"PrivateKey = {private_key}"]
+    if query.get("address"):
+        lines.append(f"Address = {query['address'].replace(',', ', ')}")
+    if query.get("dns"):
+        lines.append(f"DNS = {query['dns']}")
+    if query.get("mtu"):
+        lines.append(f"MTU = {query['mtu']}")
+    lines += ["", "[Peer]", f"PublicKey = {query['publickey']}"]
+    if query.get("presharedkey"):
+        lines.append(f"PresharedKey = {query['presharedkey']}")
+    lines += ["AllowedIPs = 0.0.0.0/0, ::/0", f"Endpoint = {host}:{parts.port}"]
+    if query.get("keepalive"):
+        lines.append(f"PersistentKeepalive = {query['keepalive']}")
+    text = "\n".join(lines) + "\n"
+    # Значения попадают в конфиг как есть: перевод строки внутри добавил бы
+    # в [Interface] чужую директиву (например PostUp).
+    values = [private_key, *query.values()]
+    return None if any(c in v for v in values for c in "\r\n") else text
+
+
+def _config_filename(email: str, protocol: str, number: int) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", email).strip("_") or "client"
+    prefix = "awg" if protocol == "amneziawg" else "wg"
+    suffix = "" if number == 1 else f"_{number}"
+    return f"{prefix}_{safe}{suffix}.conf"

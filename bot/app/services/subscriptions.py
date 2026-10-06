@@ -19,7 +19,7 @@ from app.services.notify import send_sales as notify_sales
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.remnawave import RemnawaveClient, RemnawaveError
 from shared.remnawave.models import User as RemoteUser
-from shared.panel import PanelClient, make_client, panel_name
+from shared.panel import XUI, PanelClient, make_client, panel_name, panel_type
 from shared.sync import refresh_user_summary, stored_ref
 
 log = logging.getLogger("bot.subscriptions")
@@ -35,6 +35,24 @@ def client_for(config: Config) -> PanelClient:
     return make_client(
         config.remnawave_url, config.remnawave_token, verify_tls=config.remnawave_verify_tls
     )
+
+
+async def config_files(config: Config, ref: int | str) -> list:
+    """Файлы .conf (WireGuard/AmneziaWG) для ключа — только у 3x-ui.
+
+    Роутерам нужен именно файл, а не ссылка подписки. Недоступность панели
+    не должна ломать экран ключа, поэтому при сбое — пустой список."""
+    if panel_type() != XUI:
+        return []
+    try:
+        client = client_for(config)
+        try:
+            return await client.get_config_files(ref)
+        finally:
+            await client.aclose()
+    except RemnawaveError as exc:
+        log.warning("Не удалось получить конфиг ключа %s: %s", ref, exc)
+        return []
 
 
 async def _create_or_adopt(client: RemnawaveClient, **kwargs):

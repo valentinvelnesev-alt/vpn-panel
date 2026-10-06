@@ -31,6 +31,7 @@ class FakeXui:
         self.calls: list[tuple[str, dict]] = []
         self.next_id = 1
         self.token = "tok"
+        self.links_for: dict[str, list[str]] = {}
 
     @staticmethod
     def ok(obj=None, msg: str = "") -> httpx.Response:
@@ -64,7 +65,16 @@ class FakeXui:
         if path == "/panel/api/setting/defaultSettings":
             return self.ok({"subEnable": True, "subURI": "https://sub.example:2096/sub"})
         if path == "/panel/api/inbounds/options":
-            return self.ok([{"id": 1, "remark": "VLESS-443"}, {"id": 2, "remark": "Trojan"}])
+            return self.ok(
+                [
+                    {"id": 1, "remark": "VLESS-443", "protocol": "vless"},
+                    {"id": 2, "remark": "Trojan", "protocol": "trojan"},
+                    {"id": 3, "remark": "WG-router", "protocol": "wireguard"},
+                    {"id": 4, "remark": "AWG-router", "protocol": "amneziawg"},
+                ]
+            )
+        if parts[4:5] == ["links"]:
+            return self.ok(self.links_for.get(parts[5], []))
         if path == "/panel/api/nodes/list":
             return self.ok([])
         if path == "/panel/api/clients/onlines":
@@ -251,6 +261,8 @@ async def test_stats_squads_and_nodes(fake) -> None:
     assert await client.get_internal_squads() == [
         {"uuid": "1", "name": "VLESS-443"},
         {"uuid": "2", "name": "Trojan"},
+        {"uuid": "3", "name": "WG-router"},
+        {"uuid": "4", "name": "AWG-router"},
     ]
     nodes = await client.get_nodes()
     assert nodes[0].uuid == "local" and nodes[0].is_online
@@ -330,3 +342,69 @@ async def test_existing_client_is_adopted_on_start(db, fake) -> None:
     await subs.link_from_remnawave(db, _config(), user)
     await db.commit()
     assert user.remnawave_uuid == "old_user"
+
+
+# ── Роутеры: WireGuard и AmneziaWG отдаются файлом .conf ──────────────
+AWG_CONF = (
+    "[Interface]\nPrivateKey = privAWG=\nAddress = 10.8.0.2/32\nJc = 4\n\n"
+    "# router\n[Peer]\nPublicKey = pubAWG=\nAllowedIPs = 0.0.0.0/0, ::/0\n"
+    "Endpoint = 1.2.3.4:51821"
+)
+
+
+async def _router_user(fake, inbounds: list[str], links: list[str]) -> XuiClient:
+    client = XuiClient(BASE, "tok")
+    await client.create_user(
+        username="tg_5", expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=inbounds
+    )
+    fake.links_for["tg_5"] = links
+    return client
+
+
+async def test_awg_link_is_decoded_to_conf(fake) -> None:
+    import base64
+
+    link = "vpn://" + base64.urlsafe_b64encode(AWG_CONF.encode()).decode().rstrip("=")
+    client = await _router_user(fake, ["4"], [link])
+    [file] = await client.get_config_files("tg_5")
+    assert file.protocol == "amneziawg"
+    assert file.filename == "awg_tg_5.conf"
+    assert file.text == AWG_CONF
+
+
+async def test_wireguard_link_is_built_into_conf(fake) -> None:
+    link = (
+        "wireguard://yAnz5TF%2BlXXJte14tji3zlMNq%2BhdFOCfPk8Y7WJq%2FEg%3D@1.2.3.4:51820"
+        "?publickey=pubWG%3D&address=10.0.0.2%2F32%2Cfd00%3A%3A2%2F128&mtu=1420"
+        "&dns=1.1.1.1&presharedkey=psk%3D&keepalive=25#router"
+    )
+    client = await _router_user(fake, ["3"], [link, "vless://ignored@x:1"])
+    [file] = await client.get_config_files("tg_5")
+    assert file.protocol == "wireguard" and file.filename == "wg_tg_5.conf"
+    assert file.text == (
+        "[Interface]\n"
+        "PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hdFOCfPk8Y7WJq/Eg=\n"
+        "Address = 10.0.0.2/32, fd00::2/128\n"
+        "DNS = 1.1.1.1\n"
+        "MTU = 1420\n\n"
+        "[Peer]\n"
+        "PublicKey = pubWG=\n"
+        "PresharedKey = psk=\n"
+        "AllowedIPs = 0.0.0.0/0, ::/0\n"
+        "Endpoint = 1.2.3.4:51820\n"
+        "PersistentKeepalive = 25\n"
+    )
+
+
+async def test_wireguard_link_with_newline_injection_is_dropped(fake) -> None:
+    link = "wireguard://key@1.2.3.4:51820?publickey=p&dns=1.1.1.1%0APostUp%3Drm"
+    client = await _router_user(fake, ["3"], [link])
+    assert await client.get_config_files("tg_5") == []
+
+
+async def test_router_only_client_has_no_subscription_url(fake) -> None:
+    client = await _router_user(fake, ["3", "4"], [])
+    assert (await client.get_user("tg_5")).subscription_url is None
+
+    mixed = await client.update_user("tg_5", activeInternalSquads=["1", "3"])
+    assert mixed.subscription_url == "https://sub.example:2096/sub/sub1"
