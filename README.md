@@ -10,6 +10,12 @@
 [![React](https://img.shields.io/badge/frontend-React%20%2B%20Vite-61DAFB?logo=react&logoColor=black)](frontend)
 [![aiogram](https://img.shields.io/badge/bot-aiogram%203-2CA5E0?logo=telegram&logoColor=white)](bot)
 
+<br/>
+
+[![Чат в Telegram](https://img.shields.io/badge/💬_Чат_панели-@reactuschat-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/reactuschat)
+
+Вопросы, помощь с установкой и новости об обновлениях — в нашем [Telegram-чате](https://t.me/reactuschat).
+
 </div>
 
 ---
