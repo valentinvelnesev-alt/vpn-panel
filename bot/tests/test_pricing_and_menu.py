@@ -238,3 +238,15 @@ def test_commands_mode_removes_reply_keyboard(config) -> None:
 
 def test_qr_png() -> None:
     assert handlers.qr_png("https://sub.example/abc").startswith(b"\x89PNG")
+
+
+async def test_bedolaga_referral_codes_are_case_sensitive(db, config) -> None:
+    from app.services import referral
+
+    cfg = replace(config, referral_enabled=True)
+    referrer = await subs.get_or_create_user(db, 1)
+    referrer.referral_code = "refAbC12345"
+    newbie = await subs.get_or_create_user(db, 2)
+    await db.flush()
+    found = await referral.attach_referrer(db, cfg, newbie, "refAbC12345")
+    assert found is not None and newbie.referred_by_id == referrer.id

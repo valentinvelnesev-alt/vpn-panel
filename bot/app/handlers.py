@@ -307,12 +307,15 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
     # Привязываем ДО проверки канала: после нажатия «Я подписался» payload
     # уже недоступен, и реферер терялся.
     payload = (message.text or "").partition(" ")[2].strip()
-    if payload.startswith("ref_") and config.referral_visible:
+    if payload.startswith("ref") and config.referral_visible:
+        # ref_ABC123 — наши ссылки; refAbC12345 — ссылки, розданные ещё ботом
+        # Bedolaga: код хранится целиком, вместе с «ref» (см. перенос базы).
+        code = payload.removeprefix("ref_") if payload.startswith("ref_") else payload
         async with session() as db:
             user = await subs.get_or_create_user(
                 db, message.from_user.id, username=message.from_user.username
             )
-            await referral.attach_referrer(db, config, user, payload.removeprefix("ref_"))
+            await referral.attach_referrer(db, config, user, code)
 
     if not await _channel_ok(bot, config, message.from_user.id):
         await message.answer(

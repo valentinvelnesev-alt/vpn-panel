@@ -50,9 +50,14 @@ async def attach_referrer(
     if user.trial_used or user.expire_at is not None:
         return None  # уже не «новый» пользователь
 
-    referrer = await db.scalar(
-        select(BotUser).where(BotUser.referral_code == referrer_code.strip().upper())
-    )
+    code = referrer_code.strip()
+    # Точное совпадение — для кодов, перенесённых из Bedolaga (refAbC12345,
+    # с учётом регистра); затем наши, всегда в верхнем регистре.
+    referrer = await db.scalar(select(BotUser).where(BotUser.referral_code == code))
+    if referrer is None:
+        referrer = await db.scalar(
+            select(BotUser).where(BotUser.referral_code == code.upper())
+        )
     if referrer is None or referrer.id == user.id:
         return None
 

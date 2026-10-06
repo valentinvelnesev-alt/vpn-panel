@@ -84,6 +84,17 @@ export const auth = {
     api<Admin>('/auth/totp/disable', { method: 'POST', json: { password, code } }),
 }
 
+export interface ImportReport {
+  dry_run: boolean
+  users_created: number
+  users_updated: number
+  users_skipped: number
+  balances_moved: number
+  balance_total_rub: number
+  subscriptions_imported: number
+  referrals_linked: number
+}
+
 export interface PublicBrand {
   title: string
   logo_url: string | null
@@ -573,6 +584,22 @@ export const panel = {
     api<TrafficPackage>(`/bot/traffic-packages/${id}`, { method: 'PUT', json }),
   deleteTrafficPackage: (id: number) =>
     api<void>(`/bot/traffic-packages/${id}`, { method: 'DELETE' }),
+  importBedolaga: async (file: File, dryRun: boolean) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('dry_run', String(dryRun))
+    const res = await fetch('/api/v1/bot/import/bedolaga', {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new ApiError(res.status, detail?.detail ?? `Ошибка ${res.status}`)
+    }
+    return (await res.json()) as ImportReport
+  },
+
   publicBrand: () => api<PublicBrand>('/settings/brand/public'),
   brand: () => api<BrandSettings>('/settings/brand'),
   saveBrand: (json: BrandSettings) =>

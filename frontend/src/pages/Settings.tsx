@@ -288,6 +288,73 @@ function SecurityCard() {
   )
 }
 
+function BedolagaImportCard() {
+  const queryClient = useQueryClient()
+  const [file, setFile] = useState<File | null>(null)
+  const run = useMutation({
+    mutationFn: (dryRun: boolean) => panel.importBedolaga(file!, dryRun),
+    onSuccess: (report) => {
+      if (!report.dry_run) queryClient.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+  const report = run.data
+
+  return (
+    <Card>
+      <h2 className="font-medium">Перенос из бота Bedolaga</h2>
+      <p className="mt-1 text-sm text-muted">
+        Загрузите бэкап Bedolaga — архив <code>backup_….tar.gz</code>, который он присылает в
+        Telegram (или файл database.sql / .json / .sqlite). Перенесутся клиенты, их баланс,
+        рефералы и ключи. Старые реферальные ссылки продолжат работать. Аккаунты в Remnawave
+        не меняются — бот должен быть подключён к той же панели Remnawave. Повторная загрузка
+        ничего не задвоит.
+      </p>
+      <input
+        type="file"
+        accept=".gz,.tar,.sql,.json,.sqlite,.db"
+        className="mt-4 block text-sm"
+        onChange={(e) => {
+          setFile(e.target.files?.[0] ?? null)
+          run.reset()
+        }}
+      />
+      {report && (
+        <div className="mt-4 rounded-2xl border border-border/60 p-3 text-sm">
+          <p className="font-medium">
+            {report.dry_run ? 'Будет перенесено:' : 'Перенесено:'}
+          </p>
+          <ul className="mt-1 space-y-0.5 text-muted">
+            <li>новых клиентов: {report.users_created}</li>
+            <li>уже были в боте (дополнены): {report.users_updated}</li>
+            <li>
+              балансов: {report.balances_moved} на сумму{' '}
+              {report.balance_total_rub.toLocaleString('ru-RU')} ₽
+            </li>
+            <li>ключей: {report.subscriptions_imported}</li>
+            <li>реферальных связей: {report.referrals_linked}</li>
+            {report.users_skipped > 0 && (
+              <li>пропущено (без Telegram или удалённых): {report.users_skipped}</li>
+            )}
+          </ul>
+        </div>
+      )}
+      {run.isError && <p className="mt-2 text-sm text-danger">{(run.error as Error).message}</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button variant="ghost" disabled={!file || run.isPending} onClick={() => run.mutate(true)}>
+          {run.isPending && run.variables ? 'Читаю…' : 'Проверить'}
+        </Button>
+        <Button
+          disabled={!file || run.isPending || !report?.dry_run}
+          onClick={() => run.mutate(false)}
+          title="Сначала нажмите «Проверить»"
+        >
+          {run.isPending && !run.variables ? 'Переношу…' : 'Перенести'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 export default function Settings() {
   const queryClient = useQueryClient()
   const { data: current } = useQuery({
@@ -336,6 +403,8 @@ export default function Settings() {
       <SecurityCard />
 
       <BrandCard />
+
+      <BedolagaImportCard />
 
       <AppearanceCard />
 

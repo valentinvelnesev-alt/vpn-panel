@@ -10,6 +10,7 @@ from app.api.v1 import (
     dashboard,
     gate,
     health,
+    migration,
     nodes,
     payments,
     promo,
@@ -29,6 +30,7 @@ api_router.include_router(nodes.router)
 api_router.include_router(users.router)
 api_router.include_router(bot.router)
 api_router.include_router(clients.router)
+api_router.include_router(migration.router)
 api_router.include_router(payments.router)
 api_router.include_router(promo.router)
 api_router.include_router(referrals.router)
