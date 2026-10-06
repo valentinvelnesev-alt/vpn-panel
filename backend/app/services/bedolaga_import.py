@@ -41,7 +41,9 @@ from shared.sync import refresh_user_summary
 
 log = logging.getLogger("bedolaga_import")
 
-TABLES = ("users", "subscriptions", "tariffs")
+# Таблицы, которые читаем из дампа: users — Bedolaga, clients и
+# system_settings — STEALTHNET (см. stealthnet_import.py); остальные общие.
+TABLES = ("users", "clients", "subscriptions", "tariffs", "system_settings")
 BALANCE_MARK = "Перенос баланса из Bedolaga"
 
 
@@ -64,6 +66,20 @@ class Report:
 # ── Чтение бэкапа ─────────────────────────────────────────────────────
 def read_backup(path: str) -> dict[str, list[dict]]:
     """Строки нужных таблиц из архива или файла базы."""
+    rows = _read_any(path)
+    if not rows.get("users") and not rows.get("clients"):
+        raise ImportError_(
+            "В файле нет клиентов — это точно бэкап Bedolaga или STEALTHNET?"
+        )
+    return rows
+
+
+def detect_source(rows: dict[str, list[dict]]) -> str:
+    """Чей это бэкап: у STEALTHNET клиенты в таблице clients, у Bedolaga — users."""
+    return "stealthnet" if rows.get("clients") else "bedolaga"
+
+
+def _read_any(path: str) -> dict[str, list[dict]]:
     if tarfile.is_tarfile(path):
         with tarfile.open(path) as tar, tempfile.TemporaryDirectory() as tmp:
             names = {os.path.basename(m.name): m for m in tar.getmembers() if m.isfile()}
@@ -78,7 +94,7 @@ def read_backup(path: str) -> dict[str, list[dict]]:
                 with tar.extractfile(member) as src, open(target, "wb") as dst:
                     while chunk := src.read(1 << 20):
                         dst.write(chunk)
-                return read_backup(target)
+                return _read_any(target)
             raise ImportError_(
                 "В архиве нет базы (database.sql / database.json / database.sqlite) — "
                 "это точно бэкап Bedolaga?"
@@ -97,8 +113,8 @@ def read_backup(path: str) -> dict[str, list[dict]]:
 
 def _read_json(dump: dict) -> dict[str, list[dict]]:
     data = dump.get("data") if isinstance(dump, dict) else None
-    if not isinstance(data, dict) or "users" not in data:
-        raise ImportError_("JSON не похож на выгрузку Bedolaga: нет таблицы users")
+    if not isinstance(data, dict):
+        raise ImportError_("JSON не похож на выгрузку бота: нет раздела data")
     return {table: list(data.get(table) or []) for table in TABLES}
 
 
@@ -112,8 +128,6 @@ def _read_sqlite(path: str) -> dict[str, list[dict]]:
                 result[table] = [dict(r) for r in con.execute(f"SELECT * FROM {table}")]
             except sqlite3.OperationalError:
                 result[table] = []
-        if not result["users"]:
-            raise ImportError_("В базе SQLite нет пользователей Bedolaga")
         return result
     finally:
         con.close()
@@ -145,7 +159,6 @@ def _read_sql(lines: Iterator[str]) -> dict[str, list[dict]]:
     result: dict[str, list[dict]] = {table: [] for table in TABLES}
     current: str | None = None
     columns: list[str] = []
-    found = False
     for line in lines:
         if current is None:
             if not line.startswith("COPY "):
@@ -153,7 +166,6 @@ def _read_sql(lines: Iterator[str]) -> dict[str, list[dict]]:
             head = line[5:]
             name = head.split(" ", 1)[0].split(".")[-1].strip('"')
             if name in TABLES:
-                found = found or name == "users"
                 current = name
                 inside = head[head.index("(") + 1 : head.index(")")]
                 columns = [c.strip().strip('"') for c in inside.split(",")]
@@ -165,8 +177,6 @@ def _read_sql(lines: Iterator[str]) -> dict[str, list[dict]]:
         result[current].append(
             {col: _unescape_copy(v) for col, v in zip(columns, values, strict=False)}
         )
-    if not found:
-        raise ImportError_("В SQL-дампе нет таблицы users — это точно бэкап Bedolaga?")
     return result
 
 
@@ -305,11 +315,11 @@ async def apply(db: AsyncSession, rows: dict[str, list[dict]], *, dry_run: bool 
     return report
 
 
-async def _balance_moved(db: AsyncSession, user: BotUser) -> bool:
+async def _balance_moved(db: AsyncSession, user: BotUser, mark: str = BALANCE_MARK) -> bool:
     found = await db.scalar(
         select(WalletTransaction.id)
         .join(Wallet, Wallet.id == WalletTransaction.wallet_id)
-        .where(Wallet.user_id == user.id, WalletTransaction.description == BALANCE_MARK)
+        .where(Wallet.user_id == user.id, WalletTransaction.description == mark)
         .limit(1)
     )
     return found is not None

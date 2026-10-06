@@ -297,6 +297,19 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         await send_new_screen(message, config, text, markup)
 
 
+def referral_code_from_payload(payload: str) -> str:
+    """Код реферала из /start-параметра — наш и перенесённых ботов:
+    ref_ABC123 — наш; refAbC12345 — Bedolaga (код целиком, вместе с «ref»);
+    ref_REF-AB12CD34__s_src — STEALTHNET, иногда с UTM-хвостом после «__»
+    или «_c_», который к коду не относится."""
+    if not payload.startswith("ref_"):
+        return payload
+    code = payload.removeprefix("ref_")
+    for marker in ("__", "_c_"):
+        code = code.split(marker, 1)[0]
+    return code
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContext) -> None:
     # Любой незавершённый ввод (промокод, сумма) сбрасывается — иначе
@@ -308,9 +321,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
     # уже недоступен, и реферер терялся.
     payload = (message.text or "").partition(" ")[2].strip()
     if payload.startswith("ref") and config.referral_visible:
-        # ref_ABC123 — наши ссылки; refAbC12345 — ссылки, розданные ещё ботом
-        # Bedolaga: код хранится целиком, вместе с «ref» (см. перенос базы).
-        code = payload.removeprefix("ref_") if payload.startswith("ref_") else payload
+        code = referral_code_from_payload(payload)
         async with session() as db:
             user = await subs.get_or_create_user(
                 db, message.from_user.id, username=message.from_user.username

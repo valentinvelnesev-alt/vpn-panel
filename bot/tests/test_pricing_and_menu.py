@@ -250,3 +250,12 @@ async def test_bedolaga_referral_codes_are_case_sensitive(db, config) -> None:
     await db.flush()
     found = await referral.attach_referrer(db, cfg, newbie, "refAbC12345")
     assert found is not None and newbie.referred_by_id == referrer.id
+
+
+def test_referral_payloads_of_migrated_bots() -> None:
+    parse = handlers.referral_code_from_payload
+    assert parse("ref_ABC123") == "ABC123"
+    assert parse("refAbC12345") == "refAbC12345"  # Bedolaga
+    assert parse("ref_REF-AB12CD34") == "REF-AB12CD34"  # STEALTHNET
+    assert parse("ref_REF-AB12CD34__s_tiktok__m_ads") == "REF-AB12CD34"
+    assert parse("ref_REF-AB12CD34_c_fb_summer") == "REF-AB12CD34"

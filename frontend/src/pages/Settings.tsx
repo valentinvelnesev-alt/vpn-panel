@@ -288,25 +288,29 @@ function SecurityCard() {
   )
 }
 
-function BedolagaImportCard() {
+function ImportCard() {
   const queryClient = useQueryClient()
   const [file, setFile] = useState<File | null>(null)
+  const [rate, setRate] = useState('')
+  const rubRate = Number(rate.replace(',', '.')) || undefined
   const run = useMutation({
-    mutationFn: (dryRun: boolean) => panel.importBedolaga(file!, dryRun),
+    mutationFn: (dryRun: boolean) => panel.importBackup(file!, dryRun, rubRate),
     onSuccess: (report) => {
       if (!report.dry_run) queryClient.invalidateQueries({ queryKey: ['clients'] })
     },
   })
   const report = run.data
+  const rateMissing = !!report?.needs_rate && !rubRate
 
   return (
     <Card>
-      <h2 className="font-medium">Перенос из бота Bedolaga</h2>
+      <h2 className="font-medium">Перенос из другого бота</h2>
       <p className="mt-1 text-sm text-muted">
-        Загрузите бэкап Bedolaga — архив <code>backup_….tar.gz</code>, который он присылает в
-        Telegram (или файл database.sql / .json / .sqlite). Перенесутся клиенты, их баланс,
-        рефералы и ключи. Старые реферальные ссылки продолжат работать. Аккаунты в Remnawave
-        не меняются — бот должен быть подключён к той же панели Remnawave. Повторная загрузка
+        Поддерживаются <b>Bedolaga</b> (архив <code>backup_….tar.gz</code>, который он
+        присылает в Telegram, или database.sql / .json / .sqlite) и <b>STEALTHNET</b> (файл{' '}
+        <code>stealthnet-backup-….sql</code> из раздела бэкапов). Чей это бэкап, панель поймёт
+        сама. Перенесутся клиенты, баланс, рефералы и ключи — старые реферальные ссылки
+        продолжат работать. Бот должен быть подключён к той же Remnawave. Повторная загрузка
         ничего не задвоит.
       </p>
       <input
@@ -318,10 +322,24 @@ function BedolagaImportCard() {
           run.reset()
         }}
       />
+      {report?.needs_rate && (
+        <Field
+          label={`Курс: 1 ${report.currency.toUpperCase()} = ? ₽`}
+          hint={`Баланс клиентов в ${report.source_title} хранится в ${report.currency.toUpperCase()}, у нас — в рублях.`}
+        >
+          <Input
+            inputMode="decimal"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            placeholder="например 90"
+            className="mt-1 max-w-48"
+          />
+        </Field>
+      )}
       {report && (
         <div className="mt-4 rounded-2xl border border-border/60 p-3 text-sm">
           <p className="font-medium">
-            {report.dry_run ? 'Будет перенесено:' : 'Перенесено:'}
+            {report.source_title}: {report.dry_run ? 'будет перенесено' : 'перенесено'}
           </p>
           <ul className="mt-1 space-y-0.5 text-muted">
             <li>новых клиентов: {report.users_created}</li>
@@ -329,6 +347,7 @@ function BedolagaImportCard() {
             <li>
               балансов: {report.balances_moved} на сумму{' '}
               {report.balance_total_rub.toLocaleString('ru-RU')} ₽
+              {report.needs_rate && !rubRate && ' (без курса — укажите его выше и проверьте снова)'}
             </li>
             <li>ключей: {report.subscriptions_imported}</li>
             <li>реферальных связей: {report.referrals_linked}</li>
@@ -336,6 +355,13 @@ function BedolagaImportCard() {
               <li>пропущено (без Telegram или удалённых): {report.users_skipped}</li>
             )}
           </ul>
+          {report.warnings.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-warning">
+              {report.warnings.map((w) => (
+                <li key={w}>⚠ {w}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {run.isError && <p className="mt-2 text-sm text-danger">{(run.error as Error).message}</p>}
@@ -344,7 +370,7 @@ function BedolagaImportCard() {
           {run.isPending && run.variables ? 'Читаю…' : 'Проверить'}
         </Button>
         <Button
-          disabled={!file || run.isPending || !report?.dry_run}
+          disabled={!file || run.isPending || !report?.dry_run || rateMissing}
           onClick={() => run.mutate(false)}
           title="Сначала нажмите «Проверить»"
         >
@@ -404,7 +430,7 @@ export default function Settings() {
 
       <BrandCard />
 
-      <BedolagaImportCard />
+      <ImportCard />
 
       <AppearanceCard />
 

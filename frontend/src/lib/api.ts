@@ -85,7 +85,12 @@ export const auth = {
 }
 
 export interface ImportReport {
+  source: 'bedolaga' | 'stealthnet'
+  source_title: string
   dry_run: boolean
+  currency: string
+  needs_rate: boolean
+  warnings: string[]
   users_created: number
   users_updated: number
   users_skipped: number
@@ -584,11 +589,12 @@ export const panel = {
     api<TrafficPackage>(`/bot/traffic-packages/${id}`, { method: 'PUT', json }),
   deleteTrafficPackage: (id: number) =>
     api<void>(`/bot/traffic-packages/${id}`, { method: 'DELETE' }),
-  importBedolaga: async (file: File, dryRun: boolean) => {
+  importBackup: async (file: File, dryRun: boolean, rubRate?: number) => {
     const form = new FormData()
     form.append('file', file)
     form.append('dry_run', String(dryRun))
-    const res = await fetch('/api/v1/bot/import/bedolaga', {
+    if (rubRate) form.append('rub_rate', String(rubRate))
+    const res = await fetch('/api/v1/bot/import', {
       method: 'POST',
       credentials: 'same-origin',
       body: form,
