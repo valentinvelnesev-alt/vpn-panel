@@ -162,13 +162,18 @@ class Supervisor:
 
     async def _run(self, bot: Bot, dispatcher: Dispatcher) -> None:
         try:
-            # Копим только нужные типы обновлений и пропускаем накопленные
-            # за время простоя: старые нажатия кнопок уже неактуальны.
+            # Токен мог раньше работать на другом боте через webhook (так
+            # устроен, например, Bedolaga) — пока webhook стоит, Telegram
+            # отказывает в getUpdates, и бот «запущен», но молчит. Заодно
+            # пропускаем накопленное за время простоя: старые нажатия кнопок
+            # уже неактуальны. У start_polling в aiogram 3 такого параметра
+            # нет — переданный туда drop_pending_updates молча игнорировался.
+            await bot.delete_webhook(drop_pending_updates=True)
+            # Копим только нужные типы обновлений.
             await dispatcher.start_polling(
                 bot,
                 handle_signals=False,
                 allowed_updates=["message", "callback_query", "my_chat_member"],
-                drop_pending_updates=True,
             )
         except asyncio.CancelledError:
             raise
