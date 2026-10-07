@@ -69,6 +69,8 @@ function TokenCard({ status }: { status: BotStatus }) {
   // enabled=true, но состояние ещё «остановлен» — команда ушла супервизору,
   // но он не успел отчитаться. Без этого пользователь видит «остановлен»
   // сразу после нажатия «Запустить» и решает, что кнопка не сработала.
+  // Кнопка при этом остаётся доступной: если служба бота не отвечает,
+  // «Остановить» — единственный выход из вечного «запускается…».
   const starting = status.enabled && status.state === 'stopped'
   const [colour, label] = starting ? ['bg-warning animate-pulse', 'запускается…'] : STATE_LABEL[status.state]
   const replacing = status.configured
@@ -171,11 +173,11 @@ function TokenCard({ status }: { status: BotStatus }) {
               variant={status.enabled ? 'danger' : 'primary'}
               className="ml-auto"
               onClick={() => toggle.mutate()}
-              disabled={toggle.isPending || starting}
+              disabled={toggle.isPending}
             >
               {status.enabled ? (
                 <>
-                  <Square className="size-4" /> {starting ? 'Запускается…' : 'Остановить'}
+                  <Square className="size-4" /> Остановить
                 </>
               ) : (
                 <>
