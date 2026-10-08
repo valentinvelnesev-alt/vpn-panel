@@ -275,6 +275,47 @@ async def test_free_payment_is_refused_for_non_admin(config, remote) -> None:
         assert await db.scalar(select(BotUser).where(BotUser.telegram_id == 4242)) is None
 
 
+# ── Лимит одного пополнения ───────────────────────────────────────────
+async def _topup_amount(config, text: str):
+    message = MagicMock()
+    message.text = text
+    message.answer = AsyncMock()
+    message.chat.id = 1
+    state = MagicMock()
+    state.clear = AsyncMock()
+    await handlers.on_topup_amount(message, state, config)
+    return message, state
+
+
+async def test_custom_topup_is_capped_at_10000(config) -> None:
+    for text in ("10001", "50000", "9", "-5", "abc", "nan", "inf"):
+        message, state = await _topup_amount(config, text)
+        assert "от 10 до 10000" in message.answer.await_args.args[0], text
+        state.clear.assert_not_awaited()
+
+    for text in ("10000", "10", "250,5"):
+        message, state = await _topup_amount(config, text)
+        state.clear.assert_awaited_once()
+
+
+async def test_forged_topup_callbacks_are_refused(config) -> None:
+    """callback_data подделывается: лимит держится и на выборе суммы, и на оплате."""
+    for amount in ("10001", "1000000", "nan"):
+        callback = MagicMock()
+        callback.answer = AsyncMock()
+        callback.data = f"topup:{amount}"
+        await handlers.cb_topup_preset(callback, config)
+        assert callback.answer.await_args.kwargs["show_alert"] is True
+
+        callback = MagicMock()
+        callback.from_user.id = 4242
+        callback.answer = AsyncMock()
+        callback.data = f"pay:topup:platega:{amount}"
+        await _fresh_db()
+        await handlers.cb_pay(callback, config, MagicMock())
+        assert callback.answer.await_args.kwargs["show_alert"] is True
+
+
 # ── Раскладка, цвета, кнопка меню, QR (1.6.1) ─────────────────────────
 def test_menu_columns(config) -> None:
     cfg = replace(config, menu_columns=2, support_url="https://t.me/s", channel_url="https://t.me/c")

@@ -173,7 +173,7 @@ class Supervisor:
             await dispatcher.start_polling(
                 bot,
                 handle_signals=False,
-                allowed_updates=["message", "callback_query", "my_chat_member"],
+                allowed_updates=["message", "callback_query", "my_chat_member", "pre_checkout_query"],
             )
         except asyncio.CancelledError:
             raise

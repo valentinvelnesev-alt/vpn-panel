@@ -690,6 +690,16 @@ async def cb_wallet(callback: CallbackQuery, config: Config) -> None:
 @router.callback_query(F.data.startswith("topup:"))
 async def cb_topup_preset(callback: CallbackQuery, config: Config) -> None:
     amount = callback.data.split(":", 1)[1]
+    try:
+        valid = keyboards.TOPUP_MIN_RUB <= float(amount) <= keyboards.TOPUP_MAX_RUB
+    except ValueError:
+        valid = False
+    if not valid:
+        await callback.answer(
+            f"Пополнение — от {keyboards.TOPUP_MIN_RUB} до {keyboards.TOPUP_MAX_RUB} ₽",
+            show_alert=True,
+        )
+        return
     await _show_topup_providers(callback, config, amount)
 
 
@@ -699,7 +709,8 @@ async def cb_topup_custom(callback: CallbackQuery, config: Config, state: FSMCon
     await screen(
         callback.message,
         config,
-        "Введите сумму пополнения в рублях (от 10 до 100000):",
+        f"Введите сумму пополнения в рублях (от {keyboards.TOPUP_MIN_RUB} до "
+        f"{keyboards.TOPUP_MAX_RUB}):",
         keyboards.back_to_menu(config),
     )
     await callback.answer()
@@ -712,8 +723,11 @@ async def on_topup_amount(message: Message, state: FSMContext, config: Config) -
         amount = round(float(raw), 2)
     except ValueError:
         amount = -1
-    if not (10 <= amount <= 100_000):
-        await message.answer("Сумма должна быть от 10 до 100000 ₽. Попробуйте ещё раз:")
+    if not (keyboards.TOPUP_MIN_RUB <= amount <= keyboards.TOPUP_MAX_RUB):
+        await message.answer(
+            f"Сумма должна быть от {keyboards.TOPUP_MIN_RUB} до "
+            f"{keyboards.TOPUP_MAX_RUB} ₽ за одно пополнение. Попробуйте ещё раз:"
+        )
         return
 
     await state.clear()
@@ -771,8 +785,16 @@ async def _resolve_pay_target(
     промокоду не распространяется, она обещана «на оплату тарифа».
     """
     if purpose == "topup":
+        # Сумма приходит из callback_data, а её можно подделать: границы
+        # проверяем здесь, на единственном пути к созданию платежа.
+        try:
+            amount = float(target)
+        except ValueError:
+            return EMPTY_TARGET
+        if not (keyboards.TOPUP_MIN_RUB <= amount <= keyboards.TOPUP_MAX_RUB):
+            return EMPTY_TARGET
         return PayTarget(
-            amount_kopeks=round(float(target) * 100),
+            amount_kopeks=round(amount * 100),
             description=f"Пополнение баланса на {target} ₽",
         )
 

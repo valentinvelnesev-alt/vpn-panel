@@ -22,6 +22,9 @@ from app.config import Config, PlanView, discounted_kopeks, format_rub
 from app.icons import icon_id, style_or_none
 
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
+# Границы одного пополнения баланса, ₽.
+TOPUP_MIN_RUB = 10
+TOPUP_MAX_RUB = 10_000
 
 # Подписи кнопок нижней клавиатуры — они же условие в хендлерах.
 BTN_MENU = "Меню"
