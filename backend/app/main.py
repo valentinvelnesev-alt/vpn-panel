@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1 import api_router
 from app.core.config import settings
 from app.core.gate import GateMiddleware
+from shared.remnawave import RemnawaveError
 
 logging.basicConfig(
     level=settings.log_level,
@@ -50,3 +52,9 @@ app.add_middleware(
 app.add_middleware(GateMiddleware)
 
 app.include_router(api_router)
+
+
+@app.exception_handler(RemnawaveError)
+async def panel_unavailable(request, exc: RemnawaveError):
+    log.warning("VPN panel unavailable: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": str(exc)})

@@ -11,11 +11,11 @@ from typing import Any
 
 from aiogram.types import (
     CopyTextButton,
-    ReplyKeyboardRemove,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 
 from app.config import Config, PlanView, discounted_kopeks, format_rub
@@ -348,12 +348,12 @@ def subscriptions_menu(
     техническое имя аккаунта Remnawave вида tg_123_ab12cd."""
     rows = []
     for sub in subscriptions:
-        until = sub.expire_at.strftime("%d.%m.%Y") if sub.expire_at else "—"
+        until = f"до {sub.expire_at.strftime('%d.%m.%Y')}" if sub.expire_at else "бессрочно"
         rows.append(
             [
                 _btn(
                     config,
-                    f"{titles.get(sub.id, 'Подписка')} | до {until}",
+                    f"{titles.get(sub.id, 'Подписка')} | {until}",
                     callback_data=f"viewsub:{sub.id}",
                     icon="subscription",
                 )

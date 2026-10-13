@@ -8,6 +8,7 @@ import html
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -17,10 +18,11 @@ from app.config import Config, PlanView, TrafficPackageView
 from app.services import referral
 from app.services.notify import send_sales as notify_sales
 from shared.db.models import BotSubscription, BotUser, Purchase
+from shared.panel import XUI, PanelClient, make_client, panel_name, panel_type
 from shared.remnawave import RemnawaveClient, RemnawaveError
 from shared.remnawave.models import User as RemoteUser
-from shared.panel import XUI, PanelClient, make_client, panel_name, panel_type
-from shared.sync import refresh_user_summary, stored_ref
+from shared.sync import forget_remote_key, refresh_user_summary, stored_ref
+from shared.xui import XuiClient
 
 log = logging.getLogger("bot.subscriptions")
 
@@ -437,6 +439,75 @@ async def grant_plan(
     )
 
 
+async def reconcile_deleted_clients(
+    db: AsyncSession, config: Config, user: BotUser | None = None
+) -> int:
+    """Remove stale local keys only after a successful full 3x-ui snapshot."""
+    if panel_type() != XUI:
+        return 0
+    query = select(BotSubscription).with_for_update()
+    if user is not None:
+        query = query.where(BotSubscription.user_id == user.id)
+    rows = list(await db.scalars(query))
+    if not rows and user is not None:
+        return 0
+    client = client_for(config)
+    try:
+        if not isinstance(client, XuiClient):
+            return 0
+        snapshot = await client._all_rows()
+        # Do not interpret a malformed response as an empty panel.
+        if any(not r.get("email") for r in snapshot):
+            raise RemnawaveError("3x-ui: некорректный список клиентов")
+        by_name = {r["email"]: r for r in snapshot}
+        by_id = {r["id"]: r for r in snapshot if isinstance(r.get("id"), int)}
+        by_sub_id = {r["subId"]: r for r in snapshot if r.get("subId")}
+        removed = 0
+        owners = set()
+        matched = set()
+        for row in rows:
+            owner = await db.get(BotUser, row.user_id)
+            key = urlsplit(row.subscription_url).path.rstrip("/").rsplit("/", 1)[-1] if row.subscription_url else None
+            rec = by_sub_id.get(key) or by_name.get(row.remnawave_uuid)
+            if rec is None and row.remnawave_id:
+                candidate = by_id.get(row.remnawave_id)
+                if candidate and owner and str(candidate.get("tgId")) == str(owner.telegram_id):
+                    rec = candidate
+            if rec is None:
+                await forget_remote_key(db, remnawave_id=None, remnawave_uuid=row.remnawave_uuid)
+                removed += 1
+                if owner:
+                    owner.remnawave_synced = False
+                continue
+            remote = await client._from_list_row(rec)
+            matched.add(remote.username)
+            row.username = remote.username
+            row.remnawave_uuid = remote.uuid
+            row.remnawave_id = remote.id or 0
+            row.subscription_url = remote.subscription_url
+            row.expire_at = remote.expire_at
+            owners.add(row.user_id)
+        if user is None:
+            known_users = {u.telegram_id: u for u in await db.scalars(select(BotUser))}
+            for rec in snapshot:
+                owner = known_users.get(int(rec.get("tgId") or 0))
+                if owner is None or rec["email"] in matched:
+                    continue
+                remote = await client._from_list_row(rec)
+                db.add(BotSubscription(
+                    user_id=owner.id, remnawave_id=remote.id or 0,
+                    remnawave_uuid=remote.uuid, username=remote.username,
+                    subscription_url=remote.subscription_url, expire_at=remote.expire_at,
+                ))
+                owners.add(owner.id)
+        await db.flush()
+        for owner_id in owners:
+            await refresh_user_summary(db, await db.get(BotUser, owner_id))
+    finally:
+        await client.aclose()
+    return removed
+
+
 async def link_from_remnawave(
     db: AsyncSession, config: Config, user: BotUser, *, force: bool = False
 ) -> list[BotSubscription]:
@@ -450,10 +521,14 @@ async def link_from_remnawave(
     Идемпотентна: повторно не импортирует уже привязанные ключи, а флаг
     remnawave_synced не даёт ходить в Remnawave на каждый /start.
     """
+    try:
+        await reconcile_deleted_clients(db, config, user)
+    except RemnawaveError as exc:
+        log.warning("Проверка удалённых ключей недоступна: %s", exc)
     if not force:
-        if user.remnawave_synced:
+        if user.remnawave_synced and panel_type() != XUI:
             return []
-        if await subscription_count(db, user):
+        if await subscription_count(db, user) and panel_type() != XUI:
             user.remnawave_synced = True
             return []
 
@@ -549,7 +624,7 @@ async def create_subscription(
     # заводим второй аккаунт на тот же telegram_id.
     if await subscription_count(db, user) == 0:
         adopted = await link_from_remnawave(db, config, user, force=True)
-        if adopted:
+        if adopted and any(r.expire_at is not None for r in adopted):
             target = max(adopted, key=lambda r: _aware(r.expire_at) or datetime.min.replace(tzinfo=UTC))
             return await extend_subscription(
                 db, config, target, plan, source=source, amount_kopeks=paid
@@ -641,13 +716,16 @@ async def extend_subscription(
     «Продлить». В отличие от `create_subscription`, не заводит новый
     аккаунт Remnawave, а расширяет срок действия существующего."""
     paid = plan.price_kopeks if amount_kopeks is None else amount_kopeks
-    expire_at = _base_for_extension(subscription.expire_at) + timedelta(days=plan.days)
+    expire_at = (
+        None if panel_type() == XUI and subscription.expire_at is None
+        else _base_for_extension(subscription.expire_at) + timedelta(days=plan.days)
+    )
 
     client = client_for(config)
     try:
         remote = await client.update_user(
             subscription.remote_ref,
-            expireAt=expire_at.isoformat(),
+            expireAt=expire_at.isoformat() if expire_at else None,
             status="ACTIVE",
             activeInternalSquads=plan.squad_uuids,
             hwidDeviceLimit=plan.hwid_limit,
@@ -833,6 +911,6 @@ async def apply_referral_reward(
 
 def is_active(user: BotUser) -> bool:
     if user.expire_at is None:
-        return False
+        return bool(user.remnawave_uuid)
     expire = _aware(user.expire_at)
     return expire > datetime.now(UTC)

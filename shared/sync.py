@@ -13,10 +13,10 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.db.models import BotSubscription, BotUser
+from shared.db.models import BotSubscription, BotUser, Payment, Purchase
 
 
 def stored_ref(value: str | None) -> int | str | None:
@@ -43,10 +43,9 @@ async def refresh_user_summary(db: AsyncSession, user: BotUser) -> None:
             select(BotSubscription).where(BotSubscription.user_id == user.id)
         )
     )
-    dated = [r for r in rows if r.expire_at is not None]
-    if not dated:
+    if not rows:
         return
-    best = max(dated, key=lambda r: _aware(r.expire_at))
+    best = max(rows, key=lambda r: _aware(r.expire_at) or datetime.max.replace(tzinfo=UTC))
     # remote_ref — uuid у старых панелей (до 2.9), число у новых. Хранить
     # именно его: числовой id старая панель для адресации не примет.
     user.remnawave_uuid = str(best.remote_ref)
@@ -108,6 +107,11 @@ async def forget_remote_key(
         )
     owners = {row.user_id for row in rows}
     for row in {r.id: r for r in rows}.values():
+        # Keep financial history even when SQLite foreign keys are disabled.
+        for model in (Purchase, Payment):
+            await db.execute(
+                update(model).where(model.subscription_id == row.id).values(subscription_id=None)
+            )
         await db.delete(row)
     await db.flush()
     for user_id in owners:

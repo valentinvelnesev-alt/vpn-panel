@@ -5,16 +5,19 @@
 """
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Config, PlanView
 from app.services import subscriptions as subs
 from shared.db.base import Base
-from shared.db.models import EmojiMode
+from shared.db.models import BotSubscription, EmojiMode, Purchase
 from shared.panel import make_client
 from shared.remnawave import RemnawaveError
 from shared.remnawave.models import UserStatus
@@ -32,6 +35,7 @@ class FakeXui:
         self.next_id = 1
         self.token = "tok"
         self.links_for: dict[str, list[str]] = {}
+        self.sub_id_for_new_clients: str | None = None
 
     @staticmethod
     def ok(obj=None, msg: str = "") -> httpx.Response:
@@ -92,8 +96,10 @@ class FakeXui:
             rec = {
                 **client,
                 "id": self.next_id,
-                "uuid": f"uuid-{self.next_id}",
-                "subId": f"sub{self.next_id}",
+                "uuid": str(uuid4()),
+                # The upstream API defaults an omitted Sub ID to a UUID;
+                # its web form sends a 16-character lowercase token instead.
+                "subId": self.sub_id_for_new_clients or client.get("subId") or str(uuid4()),
                 "password": "",
                 "flow": "",
                 "createdAt": 1_700_000_000_000,
@@ -181,17 +187,62 @@ async def test_create_maps_fields_and_builds_subscription_url(fake) -> None:
         hwid_device_limit=3,
         traffic_limit_bytes=10 * 1024**3,
     )
-    sent = fake.calls[0][1]
+    sent = next(body for path, body in fake.calls if path == "POST /panel/api/clients/add")
     assert sent["inboundIds"] == [1, 2]
     assert sent["client"]["expiryTime"] == int(expire.timestamp() * 1000)
     assert sent["client"]["limitHwid"] == 3
     assert sent["client"]["tgId"] == 1
+    sub_id = sent["client"]["subId"]
+    assert re.fullmatch(r"[a-z0-9]{16}", sub_id)
+    assert fake.clients["tg_1"]["subId"] == sub_id
+    assert sub_id != fake.clients["tg_1"]["uuid"]
 
     assert user.ref == "tg_1"
     assert user.status is UserStatus.ACTIVE
     assert user.expire_at == expire
-    assert user.subscription_url == "https://sub.example:2096/sub/sub1"
+    assert user.short_uuid == sub_id
+    assert user.subscription_url == f"https://sub.example:2096/sub/{sub_id}"
     assert [s.name for s in user.active_internal_squads] == ["VLESS-443", "Trojan"]
+
+
+async def test_successive_creates_have_distinct_subscription_ids(fake) -> None:
+    client = XuiClient(BASE, "tok")
+    first = await client.create_user(
+        username="tg_1", expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=["1"]
+    )
+    second = await client.create_user(
+        username="tg_2", expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=["1"]
+    )
+    assert re.fullmatch(r"[a-z0-9]{16}", second.short_uuid)
+    assert first.short_uuid != second.short_uuid
+    assert first.subscription_url != second.subscription_url
+
+
+async def test_create_uses_subscription_id_returned_by_panel(fake) -> None:
+    fake.sub_id_for_new_clients = "storedbythepanel"
+    client = XuiClient(BASE, "tok")
+    user = await client.create_user(
+        username="tg_1", expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=["1"]
+    )
+    assert user.short_uuid == fake.clients["tg_1"]["subId"] == "storedbythepanel"
+    assert user.subscription_url == "https://sub.example:2096/sub/storedbythepanel"
+
+
+async def test_existing_uuid_subscription_id_is_preserved_on_update(fake) -> None:
+    client = XuiClient(BASE, "tok")
+    # An existing user created by the API before the explicit Sub ID fix.
+    await client._post(
+        "/panel/api/clients/add",
+        json={"client": {"email": "legacy", "enable": True}, "inboundIds": [1]},
+    )
+    before = await client.get_user("legacy")
+    assert str(UUID(before.short_uuid)) == before.short_uuid
+    updated = await client.update_user(
+        "legacy", expireAt=datetime(2031, 1, 1, tzinfo=UTC).isoformat(), activeInternalSquads=["2"]
+    )
+    assert updated.short_uuid == before.short_uuid
+    assert updated.subscription_url == before.subscription_url
+    assert fake.clients["legacy"]["subId"] == before.short_uuid
 
 
 async def test_duplicate_email_is_reported_as_username_conflict(fake) -> None:
@@ -234,7 +285,7 @@ async def test_status_reflects_expiry_and_traffic(fake) -> None:
 
     fake.clients["tg_2"]["expiryTime"] = 0
     fake.traffic["tg_2"] = (0, 0)
-    assert (await client.get_user("tg_2")).expire_at.year == 2099
+    assert (await client.get_user("tg_2")).expire_at is None
 
 
 async def test_missing_client_and_bad_token(fake) -> None:
@@ -317,7 +368,10 @@ async def test_trial_then_purchase_through_3xui(db, fake) -> None:
     await db.commit()
 
     assert user.remnawave_uuid == "tg_777"
-    assert user.subscription_url == "https://sub.example:2096/sub/sub1"
+    trial_sub_id = fake.clients["tg_777"]["subId"]
+    trial_url = f"https://sub.example:2096/sub/{trial_sub_id}"
+    assert re.fullmatch(r"[a-z0-9]{16}", trial_sub_id)
+    assert user.subscription_url == trial_url
     assert fake.links["tg_777"] == {1}
 
     await subs.grant_plan(db, config, user, config.plans[0], source="manual")
@@ -328,7 +382,29 @@ async def test_trial_then_purchase_through_3xui(db, fake) -> None:
     assert fake.links["tg_777"] == {1, 2}
     expire = datetime.fromtimestamp(fake.clients["tg_777"]["expiryTime"] / 1000, tz=UTC)
     assert 32 <= (expire - datetime.now(UTC)).days <= 33
-    assert user.subscription_url == "https://sub.example:2096/sub/sub1"
+    assert fake.clients["tg_777"]["subId"] == trial_sub_id
+    assert user.subscription_url == trial_url
+
+
+async def test_trial_upgrade_and_additional_purchase_keep_independent_urls(db, fake) -> None:
+    config = _config()
+    user = await subs.get_or_create_user(db, 777)
+    await subs.grant_trial(db, config, user)
+    trial_url = user.subscription_url
+    trial_sub_id = fake.clients["tg_777"]["subId"]
+
+    upgraded = await subs.create_subscription(db, config, user, config.plans[0], source="manual")
+    assert upgraded.username == "tg_777"
+    assert upgraded.subscription_url == trial_url
+    assert fake.clients["tg_777"]["subId"] == trial_sub_id
+
+    additional = await subs.create_subscription(db, config, user, config.plans[0], source="manual")
+    additional_sub_id = fake.clients[additional.username]["subId"]
+    assert re.fullmatch(r"[a-z0-9]{16}", additional_sub_id)
+    assert additional_sub_id != trial_sub_id
+    assert additional.subscription_url == f"https://sub.example:2096/sub/{additional_sub_id}"
+    assert upgraded.subscription_url == trial_url
+    assert len(fake.clients) == 2
 
 
 async def test_existing_client_is_adopted_on_start(db, fake) -> None:
@@ -407,4 +483,141 @@ async def test_router_only_client_has_no_subscription_url(fake) -> None:
     assert (await client.get_user("tg_5")).subscription_url is None
 
     mixed = await client.update_user("tg_5", activeInternalSquads=["1", "3"])
-    assert mixed.subscription_url == "https://sub.example:2096/sub/sub1"
+    assert mixed.subscription_url == f"https://sub.example:2096/sub/{fake.clients['tg_5']['subId']}"
+
+
+async def test_deleted_inbound_is_skipped_without_mutating_empty_tariff(fake):
+    client = XuiClient(BASE, 'tok')
+    user = await client.create_user(username='check', expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=['1', '999'])
+    assert fake.links['check'] == {1}
+    await client.update_user(user.ref, activeInternalSquads=['2', '999'])
+    assert fake.links['check'] == {2}
+    original_expiry = fake.clients['check']['expiryTime']
+    with pytest.raises(XuiError, match='не осталось'):
+        await client.update_user(user.ref, activeInternalSquads=['999'], expireAt='2035-01-01T00:00:00+00:00')
+    assert fake.clients['check']['expiryTime'] == original_expiry
+    assert fake.links['check'] == {2}
+    with pytest.raises(XuiError, match='не осталось'):
+        await client.create_user(username='empty', expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=['999'])
+    assert 'empty' not in fake.clients
+    await client.aclose()
+
+
+async def test_deleted_client_keeps_history_and_trial(db, fake):
+    config = _config()
+    user = await subs.get_or_create_user(db, 887)
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    purchases = list(await db.scalars(select(Purchase)))
+    assert purchases
+    del fake.clients['tg_887']
+    assert await subs.reconcile_deleted_clients(db, config, user) == 1
+    await db.commit()
+    assert list(await db.scalars(select(BotSubscription))) == []
+    assert user.subscription_url is None and user.remnawave_uuid is None
+    assert user.trial_used
+    assert not await subs.trial_available(db, config, user)
+    kept = list(await db.scalars(select(Purchase)))
+    assert [p.id for p in kept] == [p.id for p in purchases]
+    assert all(p.subscription_id is None for p in kept)
+
+
+async def test_failure_and_malformed_snapshot_keep_local_clients(db, fake, monkeypatch):
+    config = _config()
+    user = await subs.get_or_create_user(db, 888)
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    original_url = user.subscription_url
+    fake.token = 'different'
+    with pytest.raises(XuiError):
+        await subs.reconcile_deleted_clients(db, config, user)
+    fake.token = 'tok'
+    original = XuiClient._get
+    async def malformed(self, path, **kwargs):
+        return None if path == '/panel/api/clients/list' else await original(self, path, **kwargs)
+    monkeypatch.setattr(XuiClient, '_get', malformed)
+    with pytest.raises(XuiError, match='некорректный'):
+        await subs.reconcile_deleted_clients(db, config, user)
+    assert user.subscription_url == original_url
+    assert len(list(await db.scalars(select(BotSubscription)))) == 1
+
+
+async def test_rename_and_unlimited_sync_preserve_subscription(db, fake):
+    config = _config()
+    user = await subs.get_or_create_user(db, 890)
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    before = await db.scalar(select(BotSubscription))
+    before_id = before.id
+    rec = fake.clients.pop('tg_890')
+    rec['email'] = 'Renamed'
+    rec['expiryTime'] = 0
+    fake.clients['Renamed'] = rec
+    fake.links['Renamed'] = fake.links.pop('tg_890')
+    assert await subs.reconcile_deleted_clients(db, config, user) == 0
+    await db.commit()
+    after = await db.scalar(select(BotSubscription))
+    assert after.id == before_id and after.username == 'Renamed'
+    assert after.remote_ref == 'Renamed' and after.expire_at is None
+    assert subs.is_active(user) and user.expire_at is None
+    assert user.trial_used
+    purchases = list(await db.scalars(select(Purchase)))
+    assert all(p.subscription_id == before_id for p in purchases)
+
+
+async def test_json_base_is_used_and_unlimited_renewal_stays_unlimited(db, fake, monkeypatch):
+    original = XuiClient._post
+    async def json_defaults(self, path, **kwargs):
+        if path == '/panel/api/setting/defaultSettings':
+            return {'subEnable': True, 'subURI': 'https://sub.example/sub/', 'subJsonURI': 'https://sub.example/json/'}
+        return await original(self, path, **kwargs)
+    monkeypatch.setattr(XuiClient, '_post', json_defaults)
+    config = _config()
+    user = await subs.get_or_create_user(db, 891)
+    await subs.grant_trial(db, config, user)
+    row = await db.scalar(select(BotSubscription))
+    assert row.subscription_url.startswith('https://sub.example/json/')
+    fake.clients['tg_891']['expiryTime'] = 0
+    await subs.reconcile_deleted_clients(db, config, user)
+    await subs.extend_subscription(db, config, row, config.plans[0], source='admin', amount_kopeks=0)
+    assert row.expire_at is None and fake.clients['tg_891']['expiryTime'] == 0
+
+
+async def test_nodes_accept_millisecond_heartbeat(fake, monkeypatch):
+    original = XuiClient._get
+    async def with_node(self, path, **kwargs):
+        if path == '/panel/api/nodes/list':
+            return [{'id': 1, 'name': 'node', 'lastHeartbeat': 1791700000000}]
+        return await original(self, path, **kwargs)
+    monkeypatch.setattr(XuiClient, '_get', with_node)
+    c = XuiClient(BASE, 'tok')
+    assert (await c.get_nodes())[1].last_status_change.year == 2026
+    await c.aclose()
+
+
+async def test_purchase_after_importing_unlimited_key_gets_real_term(db, fake):
+    config = _config()
+    c = XuiClient(BASE, 'tok')
+    await c.create_user(username='manual', expire_at=datetime(2030, 1, 1, tzinfo=UTC), internal_squad_uuids=['1'], telegram_id=892)
+    fake.clients['manual']['expiryTime'] = 0
+    user = await subs.get_or_create_user(db, 892)
+    purchased = await subs.create_subscription(db, config, user, config.plans[0], source='admin', amount_kopeks=0)
+    assert 29 <= (purchased.expire_at - datetime.now(UTC)).days <= 30
+    assert fake.clients['manual']['expiryTime'] == 0
+    assert purchased.username != 'manual'
+    await c.aclose()
+
+
+async def test_global_sync_reimports_existing_renamed_client(db, fake):
+    config = _config()
+    user = await subs.get_or_create_user(db, 893)
+    await subs.grant_trial(db, config, user)
+    await db.commit()
+    row = await db.scalar(select(BotSubscription))
+    from shared.sync import forget_remote_key
+    await forget_remote_key(db, remnawave_id=None, remnawave_uuid=row.remnawave_uuid)
+    await db.commit()
+    await subs.reconcile_deleted_clients(db, config)
+    rows = list(await db.scalars(select(BotSubscription)))
+    assert len(rows) == 1 and rows[0].user_id == user.id
+    assert user.trial_used

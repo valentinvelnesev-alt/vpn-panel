@@ -27,7 +27,6 @@ from aiogram.types import (
 from sqlalchemy import func, select
 
 from app import connection, keyboards, texts
-from app.icons import ICONS_OFF
 from app.config import (
     Config,
     PlanView,
@@ -35,17 +34,20 @@ from app.config import (
     discounted_kopeks,
     format_rub,
 )
+from app.icons import ICONS_OFF
 from app.services import (
     payment_check,
-    pricing,
     payment_flow,
     payment_processor,
-    promo as promo_service,
+    pricing,
     referral,
     stars,
+    wallet,
+)
+from app.services import (
+    promo as promo_service,
 )
 from app.services import subscriptions as subs
-from app.services import wallet
 from app.states import UserStates
 from app.ui import safe_edit as _safe_edit
 from app.ui import send_screen as _send_screen
@@ -157,7 +159,7 @@ def t(config: Config, template: str, **values: object) -> str:
 
 def _left(expire_at: datetime | None) -> str:
     if expire_at is None:
-        return "—"
+        return "бессрочно"
     if expire_at.tzinfo is None:
         expire_at = expire_at.replace(tzinfo=UTC)
     days = (expire_at - datetime.now(UTC)).days
@@ -178,7 +180,7 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
 
 def _date(value: datetime | None) -> str:
     if value is None:
-        return "—"
+        return "бессрочно"
     return value.strftime("%d.%m.%Y")
 
 
@@ -189,10 +191,12 @@ async def _user_discount(db, telegram_id: int) -> int:
 
 def _current_subscription(rows: list[BotSubscription]) -> BotSubscription | None:
     """Ключ с самым поздним сроком — тот, что показывается в шапке меню."""
-    dated = [r for r in rows if r.expire_at is not None]
-    if not dated:
-        return rows[0] if rows else None
-    return max(dated, key=lambda r: r.expire_at.replace(tzinfo=UTC) if r.expire_at.tzinfo is None else r.expire_at)
+    return max(
+        rows,
+        key=lambda r: (r.expire_at.replace(tzinfo=UTC) if r.expire_at.tzinfo is None else r.expire_at)
+        if r.expire_at else datetime.max.replace(tzinfo=UTC),
+        default=None,
+    )
 
 
 async def _plan_titles(db, subscriptions: list[BotSubscription]) -> dict[int, str]:
@@ -241,7 +245,7 @@ def _menu_text(config: Config, *, name: str, user: BotUser, plan_title: str | No
 
     lines = [f"<b>{name}</b>", ""]
     if subs.is_active(user):
-        lines.append(f"Подписка: <b>активна</b>")
+        lines.append("Подписка: <b>активна</b>")
         lines.append(f"До: <b>{_date(user.expire_at)}</b> ({_left(user.expire_at)})")
         if plan_title:
             lines.append(f"Тариф: <b>{plan_title}</b>")

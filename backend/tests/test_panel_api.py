@@ -280,3 +280,14 @@ def test_unexpected_remnawave_response_is_502(client: TestClient, monkeypatch) -
     monkeypatch.setattr(rw.RemnawaveClient, "__init__", broken)
     configure(client)
     assert client.get("/api/v1/users/1").status_code == 502
+
+
+def test_nodes_panel_failure_has_actionable_error(client, monkeypatch):
+    from shared.remnawave import RemnawaveClient, RemnawaveError
+    async def unavailable(self):
+        raise RemnawaveError('Панель отклонила API-токен', 401)
+    monkeypatch.setattr(RemnawaveClient, 'get_nodes', unavailable)
+    configure(client)
+    response = client.get('/api/v1/nodes')
+    assert response.status_code == 503
+    assert 'API-токен' in response.json()['detail']

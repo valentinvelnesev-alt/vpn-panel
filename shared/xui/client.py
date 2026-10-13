@@ -23,6 +23,8 @@ HTTP 200 и success=false — `_request` превращает их в XuiError.
 import base64
 import logging
 import re
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -34,8 +36,8 @@ from shared.remnawave.client import RemnawaveError
 from shared.remnawave.models import (
     Device,
     Node,
-    NodeVersions,
     NodesStats,
+    NodeVersions,
     OnlineStats,
     Squad,
     SystemStats,
@@ -50,7 +52,6 @@ log = logging.getLogger("xui")
 
 # Бессрочная подписка в 3x-ui — expiryTime=0. Модели и бот ждут дату,
 # поэтому показываем её как очень далёкую.
-_FAR_FUTURE = datetime(2099, 12, 31, tzinfo=UTC)
 
 # Узел «сама панель»: в 3x-ui ноды необязательны, клиенты обслуживает
 # Xray на том же сервере. Чтобы дашборд и алерты не были пустыми, он
@@ -244,7 +245,8 @@ class XuiClient:
         except XuiError as exc:
             log.warning("3x-ui: не удалось прочитать адрес подписки: %s", exc)
             return None
-        base = data.get("subURI") if data.get("subEnable", True) else None
+        json_base = data.get("subJsonURI") if data.get("subJsonEnable", True) else None
+        base = (json_base or data.get("subURI")) if data.get("subEnable", True) else None
         if base and not base.endswith("/"):
             base += "/"
         self._sub_base = base or None
@@ -282,7 +284,7 @@ class XuiClient:
         now = datetime.now(UTC)
         expiry = rec.get("expiryTime") or 0
         total = rec.get("totalGB") or 0
-        expire_at = _ms(expiry) if expiry > 0 else _FAR_FUTURE
+        expire_at = _ms(expiry)
 
         if not rec.get("enable", True):
             # 3x-ui сама выключает клиента по сроку и трафику — уточняем
@@ -312,7 +314,7 @@ class XuiClient:
         )
 
         return User(
-            id=None,
+            id=int(rec["id"]) if isinstance(rec.get("id"), int) else None,
             # email — единственный устойчивый ключ клиента 3x-ui. Кладём его
             # в uuid: User.ref отдаёт его первым, и он сохраняется в БД бота.
             uuid=rec["email"],
@@ -358,7 +360,9 @@ class XuiClient:
 
     # ── Пользователи ──────────────────────────────────────────────────
     async def _all_rows(self) -> list[dict[str, Any]]:
-        rows = await self._get("/panel/api/clients/list") or []
+        rows = await self._get("/panel/api/clients/list")
+        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+            raise XuiError("3x-ui: некорректный список клиентов")
         return sorted(rows, key=lambda r: r.get("id") or 0)
 
     async def get_users(self, *, start: int = 0, size: int = 50) -> UserPage:
@@ -398,7 +402,7 @@ class XuiClient:
         description: str | None = None,
         tag: str | None = None,
     ) -> User:
-        inbound_ids = [int(s) for s in internal_squad_uuids]
+        inbound_ids = await self._available_inbounds(internal_squad_uuids)
         if not inbound_ids:
             raise XuiError(
                 "3x-ui: у тарифа не выбран ни один инбаунд — укажите их в настройках тарифа",
@@ -406,6 +410,11 @@ class XuiClient:
             )
         client: dict[str, Any] = {
             "email": username,
+            # Как в форме создания 3x-ui: отдельный subId из 16 строчных
+            # букв и цифр. Без него API генерирует UUID вместо короткого ключа.
+            "subId": "".join(
+                secrets.choice(string.ascii_lowercase + string.digits) for _ in range(16)
+            ),
             "totalGB": traffic_limit_bytes,
             "expiryTime": _to_ms(expire_at),
             "tgId": telegram_id or 0,
@@ -432,13 +441,16 @@ class XuiClient:
         """Частичное обновление поверх полной записи: 3x-ui принимает только
         целую запись, поэтому читаем, меняем и отправляем обратно."""
         email = _ref(ref)
+        squads = fields.get("activeInternalSquads")
+        if squads:
+            squads = [str(i) for i in await self._available_inbounds(squads)]
         payload = await self._payload(email)
         rec = payload.get("client") or {}
         body: dict[str, Any] = {k: rec[k] for k in _UPDATE_FIELDS if k in rec}
         body["id"] = rec.get("uuid") or ""
 
-        if "expireAt" in fields and fields["expireAt"]:
-            body["expiryTime"] = _to_ms(fields["expireAt"])
+        if "expireAt" in fields:
+            body["expiryTime"] = _to_ms(fields["expireAt"]) if fields["expireAt"] else 0
         if "status" in fields and fields["status"]:
             body["enable"] = str(fields["status"]).upper() != UserStatus.DISABLED
         if "trafficLimitBytes" in fields and fields["trafficLimitBytes"] is not None:
@@ -455,10 +467,24 @@ class XuiClient:
 
         await self._post(f"/panel/api/clients/update/{email}", json=body)
 
-        squads = fields.get("activeInternalSquads")
         if squads is not None:
             await self._set_inbounds(email, set(payload.get("inboundIds") or []), squads)
         return await self.get_user(email)
+
+    async def _available_inbounds(self, squads: list[str]) -> list[int]:
+        # Read fresh options: deleting/recreating an inbound changes its ID.
+        items = await self._get("/panel/api/inbounds/options")
+        if not isinstance(items, list):
+            raise XuiError("3x-ui: не удалось проверить подключения тарифа", 400)
+        available = {int(i["id"]) for i in items}
+        wanted = list(dict.fromkeys(int(s) for s in squads))
+        valid = [i for i in wanted if i in available]
+        missing = sorted(set(wanted) - available)
+        if missing:
+            log.warning("3x-ui: удалённые подключения тарифа пропущены: %s", missing)
+        if not valid:
+            raise XuiError("3x-ui: у тарифа не осталось действующих подключений", 400)
+        return valid
 
     async def _set_inbounds(self, email: str, current: set[int], squads: list[str]) -> None:
         wanted = {int(s) for s in squads}
@@ -606,7 +632,9 @@ class XuiClient:
                     isConnected=n.get("status") == "online",
                     isDisabled=not n.get("enable", True),
                     lastStatusMessage=n.get("lastError") or n.get("xrayError") or None,
-                    lastStatusChange=datetime.fromtimestamp(n["lastHeartbeat"], tz=UTC)
+                    lastStatusChange=_ms(int(n["lastHeartbeat"]))
+                    if int(n.get("lastHeartbeat") or 0) > 100_000_000_000
+                    else datetime.fromtimestamp(n["lastHeartbeat"], tz=UTC)
                     if n.get("lastHeartbeat")
                     else None,
                     trafficUsedBytes=int(n.get("netUp") or 0) + int(n.get("netDown") or 0),
