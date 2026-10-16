@@ -1,0 +1,20 @@
+{
+	admin off
+	auto_https off
+	servers {
+		# Перед Caddy стоит Nginx на этом же сервере (локальная сеть Docker).
+		# Доверяем его X-Forwarded-For/Proto — иначе бэкенд видит вместо IP
+		# клиента адрес Nginx, и блокировка после неудачных входов сработала
+		# бы сразу на всех. Порт слушает только 127.0.0.1, подделать заголовок
+		# снаружи нельзя.
+		trusted_proxies static private_ranges
+	}
+}
+
+import /etc/caddy/panel.snippet
+
+# HTTPS и домен — на стороне Nginx. Здесь чистый HTTP на локальном порту.
+:{$PANEL_PORT:4250} {
+	import panel
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}

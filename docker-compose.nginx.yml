@@ -1,0 +1,10 @@
+# PROXY_MODE=nginx: HTTPS и домен обслуживает Nginx на самом сервере, а Caddy
+# в контейнере слушает только 127.0.0.1:PANEL_PORT по HTTP (наружу не виден).
+# Порты 80/443 не занимаются — другие сайты на сервере продолжают работать.
+services:
+  caddy:
+    ports:
+      - "127.0.0.1:${PANEL_PORT:-4250}:${PANEL_PORT:-4250}"
+    volumes:
+      # Тот же путь в контейнере, что и в docker-compose.yml, — подменяет конфиг.
+      - ./caddy/Caddyfile.nginx:/etc/caddy/Caddyfile:ro

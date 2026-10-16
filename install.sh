@@ -113,7 +113,46 @@ if [ "$mode" = "1" ]; then
 	set_ PANEL_DOMAIN "$domain"
 	set_ ACME_EMAIL "$email"
 	PANEL_URL="https://$domain"
+
+	# Чем обслуживать HTTPS. Caddy занимает порты 80 и 443 целиком, поэтому
+	# на сервере, где уже работает Nginx с другими сайтами, ему там не место:
+	# в варианте 2 Caddy слушает только 127.0.0.1, а Nginx принимает домен.
+	busy=""
+	for p in 80 443; do
+		ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p$" && busy="$busy $p"
+	done
+	if [ "$(get PROXY_MODE)" = nginx ]; then def_proxy=2; else def_proxy=1; fi
+	if [ -n "$busy" ] && [ "$(get PROXY_MODE)" != caddy ] && [ "$RECONFIGURE" = 0 ]; then
+		def_proxy=2
+		c '1;33' "
+  ⚠ На сервере заняты порты:$busy — там уже работает веб-сервер (например, Nginx).
+    Вариант 1 с ними конфликтует, поэтому по умолчанию выбран вариант 2."
+	fi
+	c '1;37' "
+  Чем обслуживать HTTPS?"
+	echo "    1) Caddy — рекомендуем. Сам получает сертификат, ничего настраивать не нужно."
+	echo "                Требует свободные порты 80 и 443."
+	echo "    2) Nginx — если на сервере уже стоит Nginx (с другими сайтами)."
+	echo "                Другие сайты не затрагиваются: добавится один отдельный файл."
+	read -rp "  Выбор [1/2, Enter — $def_proxy]: " proxy_choice
+	proxy_choice=${proxy_choice:-$def_proxy}
+	case "$proxy_choice" in
+		1) PROXY_MODE=caddy ;;
+		2) PROXY_MODE=nginx ;;
+		*) die "выберите 1 или 2" ;;
+	esac
+	if [ "$PROXY_MODE" = nginx ]; then
+		command -v nginx >/dev/null 2>&1 || die "Nginx не найден на сервере. Установите его (apt install -y nginx) или выберите Caddy."
+		PANEL_PORT=$(get PANEL_PORT); PANEL_PORT=${PANEL_PORT:-4250}
+		if [ "$RECONFIGURE" = 0 ] && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PANEL_PORT$"; then
+			die "Порт $PANEL_PORT занят. Освободите его или впишите другой в .env (PANEL_PORT=…) и запустите установщик снова."
+		fi
+		set_ PANEL_PORT "$PANEL_PORT"
+	fi
+	set_ PROXY_MODE "$PROXY_MODE"
 else
+	PROXY_MODE=caddy
+	set_ PROXY_MODE caddy
 	read -rp "  Порт панели [4250]: " port
 	port=${port:-4250}
 	[[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "некорректный порт"
@@ -147,8 +186,11 @@ fi
 chmod 600 "$ENV_FILE"
 
 # ── 5. Запуск ─────────────────────────────────────────────────────────
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.$(get DEPLOY_MODE).yml"
-set_ COMPOSE_FILE "docker-compose.yml:docker-compose.$(get DEPLOY_MODE).yml"
+# За Nginx порты 80/443 не нужны: Caddy слушает только 127.0.0.1 (оверлей nginx).
+OVERLAY=$(get DEPLOY_MODE)
+[ "$(get PROXY_MODE)" = nginx ] && OVERLAY=nginx
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.$OVERLAY.yml"
+set_ COMPOSE_FILE "docker-compose.yml:docker-compose.$OVERLAY.yml"
 
 # По умолчанию тянем готовые образы из реестра — это секунды вместо минут
 # сборки из исходников. BUILD_FROM_SOURCE=1 собирает локально (форк/разработка).
@@ -174,6 +216,76 @@ for i in $(seq 1 60); do
 done
 [ "${ready:-0}" = 1 ] || die "панель не поднялась. Логи:  $COMPOSE logs panel-api"
 ok "Панель работает"
+
+# ── 5a. Nginx ─────────────────────────────────────────────────────────
+# Один отдельный файл для домена панели; остальные сайты не трогаем.
+if [ "$(get PROXY_MODE)" = nginx ]; then
+	domain=$(get PANEL_DOMAIN); email=$(get ACME_EMAIL); port=$(get PANEL_PORT)
+	if [ -d /etc/nginx/sites-available ] && [ -d /etc/nginx/sites-enabled ]; then
+		NGINX_CONF=/etc/nginx/sites-available/vpn-panel.conf
+		NGINX_LINK=/etc/nginx/sites-enabled/vpn-panel.conf
+	else
+		NGINX_CONF=/etc/nginx/conf.d/vpn-panel.conf
+		NGINX_LINK=""
+	fi
+	if [ -f "$NGINX_CONF" ]; then
+		# Не перезаписываем: certbot уже мог дописать в файл HTTPS.
+		ok "Конфиг Nginx уже есть ($NGINX_CONF) — оставляю как есть"
+	else
+		cat >"$NGINX_CONF" <<NGINX
+# VPN Panel — создано install.sh. Затрагивает только домен $domain.
+map \$http_upgrade \$vpnpanel_connection {
+	default upgrade;
+	''      close;
+}
+
+server {
+	listen 80;
+	listen [::]:80;
+	server_name $domain;
+
+	# Бэкапы для переноса из других ботов бывают большими.
+	client_max_body_size 200m;
+
+	location / {
+		proxy_pass http://127.0.0.1:$port;
+		proxy_http_version 1.1;
+		proxy_set_header Host \$host;
+		proxy_set_header X-Real-IP \$remote_addr;
+		proxy_set_header X-Forwarded-For \$remote_addr;
+		proxy_set_header X-Forwarded-Proto \$scheme;
+		proxy_set_header Upgrade \$http_upgrade;
+		proxy_set_header Connection \$vpnpanel_connection;
+		proxy_read_timeout 300s;
+		proxy_send_timeout 300s;
+	}
+}
+NGINX
+		[ -n "$NGINX_LINK" ] && ln -sf "$NGINX_CONF" "$NGINX_LINK"
+		ok "Конфиг Nginx создан: $NGINX_CONF"
+	fi
+	nginx -t >/dev/null 2>&1 || { nginx -t; die "Nginx отклонил конфиг. Другие сайты не затронуты, но проверьте вывод выше"; }
+	systemctl reload nginx 2>/dev/null || nginx -s reload || die "не удалось перезагрузить Nginx"
+	ok "Nginx перезагружен"
+
+	# HTTPS: certbot дописывает 443 только в блок нашего домена.
+	if [ ! -d "/etc/letsencrypt/live/$domain" ]; then
+		inf "  Получаю сертификат Let's Encrypt для $domain…"
+		command -v certbot >/dev/null 2>&1 || {
+			export DEBIAN_FRONTEND=noninteractive
+			apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1 || true
+		}
+		if certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email --redirect -n; then
+			ok "HTTPS включён"
+		else
+			c '1;33' "  ⚠ Сертификат не выдан (проверьте, что A-запись $domain указывает на этот сервер).
+    Без HTTPS вход в панель не заработает. Когда запись обновится, выполните:
+      certbot --nginx -d $domain -m $email --agree-tos --redirect"
+		fi
+	else
+		ok "Сертификат для $domain уже есть"
+	fi
+fi
 
 # ── 6. Первый администратор ───────────────────────────────────────────
 if $COMPOSE exec -T panel-api python -m app.cli admin-exists < /dev/null 2>/dev/null; then

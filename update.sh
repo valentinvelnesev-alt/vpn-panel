@@ -68,7 +68,9 @@ ok "Бэкап .env → $BACKUP_FILE"
 # ── 2. Бэкап базы данных ──────────────────────────────────────────────
 get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }
 DEPLOY_MODE=$(get DEPLOY_MODE)
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${DEPLOY_MODE}.yml"
+OVERLAY=$DEPLOY_MODE
+[ "$(get PROXY_MODE)" = nginx ] && OVERLAY=nginx
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${OVERLAY}.yml"
 
 DB_BACKUP="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S).sql"
 DB_USER=$(get POSTGRES_USER); DB_USER=${DB_USER:-vpnpanel}
