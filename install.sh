@@ -289,13 +289,15 @@ NGINX
 	ok "Nginx перезагружен"
 
 	# HTTPS: certbot дописывает 443 только в блок нашего домена.
-	if [ ! -d "/etc/letsencrypt/live/$domain" ]; then
-		inf "  Получаю сертификат Let's Encrypt для $domain…"
+	# Смотрим на сам конфиг, а не на наличие сертификата: сертификат мог
+	# остаться от прошлой попытки, а HTTPS в новый файл так и не попал.
+	if ! grep -qE "^[[:space:]]*listen[[:space:]].*443" "$NGINX_CONF"; then
+		inf "  Настраиваю HTTPS (Let's Encrypt) для $domain…"
 		command -v certbot >/dev/null 2>&1 || {
 			export DEBIAN_FRONTEND=noninteractive
 			apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1 || true
 		}
-		if certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email --redirect -n; then
+		if certbot --nginx -d "$domain" -m "$email" --agree-tos --no-eff-email --redirect --reinstall -n; then
 			ok "HTTPS включён"
 		else
 			c '1;33' "  ⚠ Сертификат не выдан (проверьте, что A-запись $domain указывает на этот сервер).
@@ -303,7 +305,7 @@ NGINX
       certbot --nginx -d $domain -m $email --agree-tos --redirect"
 		fi
 	else
-		ok "Сертификат для $domain уже есть"
+		ok "HTTPS для $domain уже настроен"
 	fi
 fi
 
