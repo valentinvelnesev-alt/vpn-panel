@@ -136,7 +136,10 @@ bash install.sh
 остальные конфиги.
 
 Что нужно заранее:
-- домен панели (например `panel.example.com`) с A-записью на IP сервера;
+- **отдельный поддомен для панели** (например `panel.ваш-домен.ru`) с A-записью на IP
+  сервера. Нельзя использовать домен, на котором уже работает ваш сайт: панель
+  открывается с корня домена, и вместо неё вы увидите 404 от вашего сайта.
+  Если указать занятый домен, установщик это заметит и остановится;
 - установленный Nginx (`nginx -v` должен показать версию).
 
 Как ставить: те же команды шага 4, а на вопросах выбрать:
@@ -158,38 +161,38 @@ bash install.sh
 certbot --nginx -d panel.example.com -m ваш@email.com --agree-tos --redirect
 ```
 
-**Нужно настроить Nginx вручную** (например, сертификат у вас уже есть)?
-Вставьте в свой конфиг:
+**Нужно настроить Nginx вручную** (например, установщик не справился)? Это
+запасной вариант. Подставьте своё в трёх местах: домен, порт и пути к
+сертификату.
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name panel.example.com;
-    # ssl_certificate и ssl_certificate_key — ваши
+    server_name panel.example.com;                  # 1. ваш поддомен для панели
+
+    ssl_certificate     /etc/letsencrypt/live/panel.example.com/fullchain.pem;  # 2. сертификат
+    ssl_certificate_key /etc/letsencrypt/live/panel.example.com/privkey.pem;    #    и ключ
 
     client_max_body_size 200m;
 
     location / {
-        proxy_pass http://127.0.0.1:4250;
+        proxy_pass http://127.0.0.1:4250;           # 3. порт панели (см. ниже)
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $connection_upgrade;  # нужен map, см. ниже
+        proxy_set_header Connection "upgrade";
         proxy_read_timeout 300s;
     }
 }
 ```
 
-В блок `http { … }` (или рядом с `server`) добавьте, если такого `map` ещё нет:
-
-```nginx
-map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-```
-
-После правок: `nginx -t && systemctl reload nginx`.
+- **Порт** — тот, что записан в `.env` панели: `grep PANEL_PORT ~/vpn-panel/.env`
+  (по умолчанию 4250).
+- **Сертификат** выпускается командой `certbot certonly --nginx -d panel.example.com`,
+  файлы после этого лежат в `/etc/letsencrypt/live/panel.example.com/`.
+- Проверить и применить: `nginx -t && systemctl reload nginx`.
 
 ## Шаг 5. Подключите панель к 3x-ui
 

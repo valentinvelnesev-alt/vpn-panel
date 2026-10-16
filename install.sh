@@ -143,6 +143,16 @@ if [ "$mode" = "1" ]; then
 	esac
 	if [ "$PROXY_MODE" = nginx ]; then
 		command -v nginx >/dev/null 2>&1 || die "Nginx не найден на сервере. Установите его (apt install -y nginx) или выберите Caddy."
+		# Панель открывается с корня домена (/assets, /api…), поэтому делить
+		# домен с другим сайтом нельзя: Nginx отдаст запрос тому, кто был первым,
+		# и вместо панели будет 404. Нужен отдельный поддомен.
+		dom_re=${domain//./\\.}
+		if [ ! -f /etc/nginx/sites-available/vpn-panel.conf ] && [ ! -f /etc/nginx/conf.d/vpn-panel.conf ] \
+			&& nginx -T 2>/dev/null | grep -qE "^[[:space:]]*server_name[^;]*[[:space:]]${dom_re}[[:space:];]"; then
+			die "В Nginx уже есть сайт на домене $domain. Панель нельзя поставить на тот же домен.
+    Создайте поддомен (например panel.$domain) — A-запись на IP этого сервера —
+    и запустите установщик снова, указав его."
+		fi
 		PANEL_PORT=$(get PANEL_PORT); PANEL_PORT=${PANEL_PORT:-4250}
 		if [ "$RECONFIGURE" = 0 ] && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PANEL_PORT$"; then
 			die "Порт $PANEL_PORT занят. Освободите его или впишите другой в .env (PANEL_PORT=…) и запустите установщик снова."
