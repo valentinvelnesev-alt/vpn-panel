@@ -147,11 +147,15 @@ if [ "$mode" = "1" ]; then
 		# домен с другим сайтом нельзя: Nginx отдаст запрос тому, кто был первым,
 		# и вместо панели будет 404. Нужен отдельный поддомен.
 		dom_re=${domain//./\\.}
-		if [ ! -f /etc/nginx/sites-available/vpn-panel.conf ] && [ ! -f /etc/nginx/conf.d/vpn-panel.conf ] \
-			&& nginx -T 2>/dev/null | grep -qE "^[[:space:]]*server_name[^;]*[[:space:]]${dom_re}[[:space:];]"; then
-			die "В Nginx уже есть сайт на домене $domain. Панель нельзя поставить на тот же домен.
-    Создайте поддомен (например panel.$domain) — A-запись на IP этого сервера —
-    и запустите установщик снова, указав его."
+		# Собственный файл установщика (vpn-panel.conf) не считаем: его
+		# содержимое при необходимости перепишем ниже.
+		if nginx -T 2>/dev/null \
+			| awk '/^# configuration file /{skip=($0 ~ /vpn-panel\.conf/)} !skip' \
+			| grep -qE "^[[:space:]]*server_name[^;]*[[:space:]]${dom_re}[[:space:];]"; then
+			die "В Nginx уже есть сайт на домене $domain (найти: grep -rn $domain /etc/nginx/).
+    Панель нельзя поставить на тот же домен. Создайте поддомен
+    (например panel.$domain) — A-запись на IP этого сервера — и запустите
+    установщик снова, указав его."
 		fi
 		PANEL_PORT=$(get PANEL_PORT); PANEL_PORT=${PANEL_PORT:-4250}
 		if [ "$RECONFIGURE" = 0 ] && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PANEL_PORT$"; then
@@ -238,10 +242,16 @@ if [ "$(get PROXY_MODE)" = nginx ]; then
 		NGINX_CONF=/etc/nginx/conf.d/vpn-panel.conf
 		NGINX_LINK=""
 	fi
-	if [ -f "$NGINX_CONF" ]; then
+	if [ -f "$NGINX_CONF" ] && grep -qE "^[[:space:]]*server_name[[:space:]]+${domain//./\\.}[[:space:];]" "$NGINX_CONF"; then
 		# Не перезаписываем: certbot уже мог дописать в файл HTTPS.
 		ok "Конфиг Nginx уже есть ($NGINX_CONF) — оставляю как есть"
 	else
+		if [ -f "$NGINX_CONF" ]; then
+			# Домен сменился: иначе certbot не найдёт блок и допишет пустой,
+			# без проксирования на панель — и вместо неё будет 404.
+			cp "$NGINX_CONF" "$NGINX_CONF.bak"
+			c '1;33' "  ⚠ В $NGINX_CONF был другой домен — переписываю (копия: $NGINX_CONF.bak)"
+		fi
 		cat >"$NGINX_CONF" <<NGINX
 # VPN Panel — создано install.sh. Затрагивает только домен $domain.
 map \$http_upgrade \$vpnpanel_connection {
