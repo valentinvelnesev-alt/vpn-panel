@@ -130,6 +130,9 @@ class BotConfig(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
 
     token_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
+    # SOCKS5-прокси до Telegram (socks5://user:pass@host:port), зашифрован:
+    # на серверах в РФ api.telegram.org недоступен напрямую.
+    proxy_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
     bot_username: Mapped[str | None] = mapped_column(String(64), default=None)
     bot_name: Mapped[str | None] = mapped_column(String(128), default=None)
     bot_id: Mapped[int | None] = mapped_column(BigInteger, default=None)

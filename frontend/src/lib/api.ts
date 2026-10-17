@@ -244,6 +244,7 @@ export interface BotStatus extends BotSettings {
   state: 'stopped' | 'running' | 'error'
   state_message: string | null
   token_masked: string | null
+  proxy_masked: string | null
   bot_username: string | null
   bot_name: string | null
   started_at: string | null
@@ -419,6 +420,13 @@ export interface AnalyticsOverview {
   top_plans: { title: string; purchases: number; revenue_rub: number }[]
 }
 
+export interface BotProxy {
+  host: string
+  port: number
+  username: string | null
+  password: string | null
+}
+
 export interface RemnawaveSettings {
   url: string | null
   token_masked: string | null
@@ -467,6 +475,14 @@ export const panel = {
     }>('/bot/token/check', { method: 'POST', json: { token } }),
   setBotToken: (token: string) =>
     api<BotStatus>('/bot/token', { method: 'PUT', json: { token } }),
+  checkBotProxy: (proxy: BotProxy) =>
+    api<{ ok: boolean; message: string }>('/bot/proxy/check', {
+      method: 'POST',
+      json: proxy,
+    }),
+  setBotProxy: (proxy: BotProxy) =>
+    api<BotStatus>('/bot/proxy', { method: 'PUT', json: proxy }),
+  deleteBotProxy: () => api<BotStatus>('/bot/proxy', { method: 'DELETE' }),
   startBot: () => api<BotStatus>('/bot/start', { method: 'POST' }),
   stopBot: () => api<BotStatus>('/bot/stop', { method: 'POST' }),
   setMenuPhoto: (file: File) => {

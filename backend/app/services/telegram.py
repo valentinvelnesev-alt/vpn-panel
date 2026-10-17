@@ -26,8 +26,29 @@ class BotIdentity:
     name: str
 
 
-async def _call(token: str, method: str, **payload) -> dict:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+def _httpx_proxy(proxy: str | None) -> str | None:
+    # socks5h — имя хоста резолвит сам прокси, а не сервер панели.
+    return proxy.replace("socks5://", "socks5h://", 1) if proxy else None
+
+
+_AUTO = object()
+
+
+async def _saved_proxy() -> str | None:
+    """Прокси, сохранённый в настройках бота (None — ходим напрямую)."""
+    from app.db.session import SessionLocal
+    from shared.crypto import decrypt
+    from shared.db.models import BotConfig
+
+    async with SessionLocal() as db:
+        row = await db.get(BotConfig, 1)
+    return decrypt(row.proxy_encrypted) if row and row.proxy_encrypted else None
+
+
+async def _call(token: str, method: str, *, proxy=_AUTO, **payload) -> dict:
+    if proxy is _AUTO:
+        proxy = await _saved_proxy()
+    async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_httpx_proxy(proxy)) as client:
         try:
             response = await client.post(f"{API}/bot{token}/{method}", json=payload)
         except httpx.HTTPError as exc:
@@ -39,16 +60,30 @@ async def _call(token: str, method: str, **payload) -> dict:
     return body["result"]
 
 
-async def get_me(token: str) -> BotIdentity:
+async def get_me(token: str, proxy=_AUTO) -> BotIdentity:
     """Проверяет токен и возвращает, какому боту он принадлежит."""
     if not token or ":" not in token:
         raise TelegramError("Токен не похож на настоящий — скопируйте его из @BotFather")
-    result = await _call(token, "getMe")
+    result = await _call(token, "getMe", proxy=proxy)
     return BotIdentity(
         id=result["id"],
         username=result.get("username", ""),
         name=result.get("first_name", ""),
     )
+
+
+async def ping(proxy: str | None) -> None:
+    """Проверяет, что до Telegram можно достучаться через прокси."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_httpx_proxy(proxy)) as client:
+            response = await client.get(f"{API}/")
+    except httpx.HTTPError as exc:
+        raise TelegramError(
+            f"Через этот прокси Telegram недоступен: {exc or type(exc).__name__}. "
+            "Проверьте адрес, порт, логин и пароль."
+        ) from exc
+    if response.status_code >= 500:
+        raise TelegramError(f"Telegram ответил ошибкой {response.status_code}")
 
 
 async def check_premium_emoji(token: str, chat_id: int, emoji_id: str) -> None:

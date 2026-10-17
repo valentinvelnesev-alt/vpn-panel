@@ -11,12 +11,11 @@ import os
 from datetime import UTC, datetime
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from app import config as config_module
+from app import telegram_client
 from shared import bus
 from shared.db.models import BotConfig, BotState
 from shared.db.session import session
@@ -78,10 +77,8 @@ class Supervisor:
             await self._set_state(BotState.STOPPED)
             return
 
-        bot = Bot(
-            token=config.token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
+        telegram_client.set_proxy(config.proxy)
+        bot = telegram_client.make_bot(config.token)
         try:
             me = await bot.get_me()
         except TelegramUnauthorizedError:

@@ -193,6 +193,131 @@ function TokenCard({ status }: { status: BotStatus }) {
   )
 }
 
+function ProxyCard({ status }: { status: BotStatus }) {
+  const queryClient = useQueryClient()
+  const [host, setHost] = useState('')
+  const [port, setPort] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+
+  const refresh = (data: BotStatus) => queryClient.setQueryData(['bot'], data)
+  const proxy = () => ({
+    host: host.trim(),
+    port: Number(port),
+    username: username.trim() || null,
+    password: password || null,
+  })
+  const valid = host.trim() !== '' && Number(port) > 0 && Number(port) < 65536
+
+  const check = useMutation({ mutationFn: () => panel.checkBotProxy(proxy()) })
+  const save = useMutation({
+    mutationFn: () => panel.setBotProxy(proxy()),
+    onSuccess: (data) => {
+      refresh(data)
+      setHost('')
+      setPort('')
+      setUsername('')
+      setPassword('')
+      check.reset()
+    },
+  })
+  const remove = useMutation({
+    mutationFn: () => panel.deleteBotProxy(),
+    onSuccess: refresh,
+  })
+
+  return (
+    <Card>
+      <h2 className="font-medium">Прокси для Telegram</h2>
+      <p className="mt-1 text-sm text-muted">
+        Если сервер находится в России и Telegram с него не открывается, укажите SOCKS5-прокси:
+        через него пойдут и бот, и проверки из панели. Данные хранятся в базе в зашифрованном виде.
+      </p>
+
+      {status.proxy_masked && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-bg px-3 py-2 text-sm">
+          <span>
+            Используется <span className="font-medium">{status.proxy_masked}</span>
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+          >
+            Отключить
+          </Button>
+        </div>
+      )}
+
+      <form
+        className="mt-4 space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save.mutate()
+        }}
+      >
+        <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+          <Field label="Адрес">
+            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="1.2.3.4" />
+          </Field>
+          <Field label="Порт">
+            <Input
+              inputMode="numeric"
+              value={port}
+              onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))}
+              placeholder="1080"
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Логин" hint="Если прокси без авторизации — оставьте пустым.">
+            <Input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="Пароль">
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+            />
+          </Field>
+        </div>
+
+        {check.data && (
+          <p
+            className={`flex items-center gap-2 text-sm ${
+              check.data.ok ? 'text-success' : 'text-danger'
+            }`}
+          >
+            {check.data.ok ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+            {check.data.message}
+          </p>
+        )}
+        {save.isError && <p className="text-sm text-danger">{(save.error as Error).message}</p>}
+
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!valid || save.isPending}>
+            {save.isPending ? 'Проверяю…' : status.proxy_masked ? 'Заменить' : 'Сохранить'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => check.mutate()}
+            disabled={!valid || check.isPending}
+          >
+            {check.isPending ? 'Проверяю…' : 'Проверить'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 function MenuPhotoCard({ status }: { status: BotStatus }) {
   const queryClient = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -718,6 +843,7 @@ export default function Bot() {
   return (
     <div className="max-w-3xl space-y-6">
       <TokenCard status={status} />
+      <ProxyCard status={status} />
       {status.configured && (
         <>
           <MenuPhotoCard status={status} />

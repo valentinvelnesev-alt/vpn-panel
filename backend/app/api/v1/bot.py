@@ -2,6 +2,7 @@ import os
 import uuid as uuid_lib
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
@@ -54,6 +55,7 @@ class BotStatusOut(BaseModel):
     state: str
     state_message: str | None
     token_masked: str | None
+    proxy_masked: str | None
     bot_username: str | None
     bot_name: str | None
     started_at: datetime | None
@@ -101,6 +103,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         state=str(row.state),
         state_message=row.state_message,
         token_masked=mask(token) if token else None,
+        proxy_masked=_proxy_masked(row),
         bot_username=row.bot_username,
         bot_name=row.bot_name,
         started_at=row.started_at,
@@ -139,6 +142,93 @@ def _status(row: BotConfig) -> BotStatusOut:
 @router.get("", response_model=BotStatusOut)
 async def get_status(admin: CurrentAdmin, db: DbSession) -> BotStatusOut:
     return _status(await _config(db))
+
+
+# ── Прокси ────────────────────────────────────────────────────────────
+class ProxyIn(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=255)
+
+    def url(self) -> str:
+        host = self.host.strip()
+        for prefix in ("socks5h://", "socks5://"):
+            host = host.removeprefix(prefix)
+        if not host or any(c in host for c in "/@ "):
+            raise ValueError("Адрес прокси указан неверно")
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"  # IPv6
+        auth = ""
+        if self.username:
+            auth = quote(self.username, safe="")
+            if self.password:
+                auth += ":" + quote(self.password, safe="")
+            auth += "@"
+        return f"socks5://{auth}{host}:{self.port}"
+
+
+def _proxy_masked(row: BotConfig) -> str | None:
+    if not row.proxy_encrypted:
+        return None
+    parts = urlsplit(decrypt(row.proxy_encrypted))
+    auth = "•••@" if parts.username else ""
+    return f"socks5://{auth}{parts.hostname}:{parts.port}"
+
+
+def _proxy_url(data: ProxyIn) -> str:
+    try:
+        return data.url()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+class ProxyCheckOut(BaseModel):
+    ok: bool
+    message: str
+
+
+@router.post("/proxy/check", response_model=ProxyCheckOut)
+async def check_proxy(
+    data: ProxyIn, admin: CurrentAdmin, db: DbSession
+) -> ProxyCheckOut:
+    """Проверяет, достаёт ли прокси до Telegram, до сохранения."""
+    url = _proxy_url(data)
+    try:
+        await telegram.ping(proxy=url)
+    except TelegramError as exc:
+        return ProxyCheckOut(ok=False, message=str(exc))
+    return ProxyCheckOut(ok=True, message="Прокси работает — Telegram отвечает")
+
+
+@router.put("/proxy", response_model=BotStatusOut)
+async def set_proxy(
+    data: ProxyIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> BotStatusOut:
+    url = _proxy_url(data)
+    try:
+        await telegram.ping(proxy=url)
+    except TelegramError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return await _save_proxy(db, admin, request, encrypt(url))
+
+
+@router.delete("/proxy", response_model=BotStatusOut)
+async def delete_proxy(
+    admin: CurrentAdmin, db: DbSession, request: Request
+) -> BotStatusOut:
+    return await _save_proxy(db, admin, request, None)
+
+
+async def _save_proxy(db, admin, request: Request, value: str | None) -> BotStatusOut:
+    row = await _config(db)
+    row.proxy_encrypted = value
+    _audit(db, admin, "bot.proxy", request, enabled=value is not None)
+    await db.flush()
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    if row.enabled:
+        await bus.publish(bus.CMD_START)  # перезапуск бота с новым прокси
+    return _status(row)
 
 
 # ── Токен ─────────────────────────────────────────────────────────────

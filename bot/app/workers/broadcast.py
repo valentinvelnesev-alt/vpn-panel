@@ -18,14 +18,12 @@ import os
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 
+from app.telegram_client import make_bot
 from shared.db.models import Broadcast, BroadcastSegment, BroadcastStatus, BotUser
 from shared.db.session import SessionLocal, session
 from shared.segments import recipients_query
@@ -136,7 +134,7 @@ async def _send(broadcast_id: int, token: str) -> None:
         text = broadcast.text
         photo_url = broadcast.photo_url
 
-    bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = make_bot(token)
     # Файл загружается в Telegram один раз, дальше идёт его file_id.
     photo = None
     if photo_url:

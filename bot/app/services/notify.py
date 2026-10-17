@@ -7,10 +7,9 @@
 
 import logging
 
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramMigrateToChat
+
+from app.telegram_client import make_bot
 
 log = logging.getLogger("bot.notify")
 
@@ -18,7 +17,7 @@ log = logging.getLogger("bot.notify")
 async def send(token: str | None, chat_id: int, text: str, **kwargs: object) -> bool:
     if not token:
         return False
-    bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = make_bot(token)
     try:
         await bot.send_message(chat_id, text, **kwargs)
         return True
@@ -38,7 +37,7 @@ async def send_sales(token: str, chat_id: int, text: str) -> bool:
     id. Тогда переотправляем туда и сохраняем новый id в настройках, чтобы
     уведомления не пропадали молча до следующей правки в панели.
     """
-    bot = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = make_bot(token)
     try:
         try:
             await bot.send_message(chat_id, text, disable_web_page_preview=True)

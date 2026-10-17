@@ -199,6 +199,9 @@ class Config:
     cryptobot_token: str | None = None
     stars_enabled: bool = False
 
+    # SOCKS5-прокси до Telegram; None — напрямую.
+    proxy: str | None = None
+
     loaded_at: datetime | None = None
 
     @property
@@ -328,6 +331,7 @@ async def load(db: AsyncSession) -> Config:
 
     return Config(
         token=decrypt(row.token_encrypted) if row.token_encrypted else None,
+        proxy=decrypt(row.proxy_encrypted) if row.proxy_encrypted else None,
         enabled=row.enabled,
         emoji_mode=EmojiMode(row.emoji_mode),
         premium_emoji=row.premium_emoji or {},

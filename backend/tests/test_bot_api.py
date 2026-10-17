@@ -221,3 +221,32 @@ def test_bot_endpoints_require_auth() -> None:
         assert anon.get("/api/v1/bot").status_code == 401
         assert anon.post("/api/v1/bot/start").status_code == 401
         assert anon.get("/api/v1/bot/plans").status_code == 401
+
+
+def test_proxy_saved_encrypted_and_masked(client: TestClient, monkeypatch) -> None:
+    pinged: list[str] = []
+
+    async def fake_ping(proxy):
+        pinged.append(proxy)
+
+    monkeypatch.setattr(telegram, "ping", fake_ping)
+
+    body = client.put(
+        "/api/v1/bot/proxy",
+        json={"host": "10.0.0.1", "port": 1080, "username": "u", "password": "p@ss"},
+    ).json()
+    assert pinged == ["socks5://u:p%40ss@10.0.0.1:1080"]
+    assert body["proxy_masked"] == "socks5://•••@10.0.0.1:1080"
+    assert "p%40ss" not in str(body)
+
+    assert client.delete("/api/v1/bot/proxy").json()["proxy_masked"] is None
+
+
+def test_proxy_not_saved_when_telegram_unreachable(client: TestClient, monkeypatch) -> None:
+    async def failing(proxy):
+        raise telegram.TelegramError("нет связи")
+
+    monkeypatch.setattr(telegram, "ping", failing)
+    resp = client.put("/api/v1/bot/proxy", json={"host": "10.0.0.1", "port": 1080})
+    assert resp.status_code == 422
+    assert client.get("/api/v1/bot").json()["proxy_masked"] is None
