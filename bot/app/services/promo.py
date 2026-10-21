@@ -7,7 +7,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +55,28 @@ async def redeem(db: AsyncSession, promo: PromoCode, user: BotUser) -> None:
                 )
             )
             await db.flush()
+            # Счётчик — одним UPDATE с условием: проверка лимита в find() и
+            # «+= 1» в памяти пропускали двоих одновременных сверх max_uses.
+            result = await db.execute(
+                update(PromoCode)
+                .where(
+                    PromoCode.id == promo.id,
+                    or_(
+                        PromoCode.max_uses.is_(None),
+                        PromoCode.uses_count < PromoCode.max_uses,
+                    ),
+                )
+                .values(uses_count=PromoCode.uses_count + 1)
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount == 0:
+                raise _Exhausted
     except IntegrityError as exc:
         raise PromoError("Вы уже использовали этот промокод") from exc
-    promo.uses_count += 1
+    except _Exhausted as exc:
+        raise PromoError("Промокод исчерпан") from exc
+    await db.refresh(promo, ["uses_count"])
+
+
+class _Exhausted(Exception):
+    """Лимит промокода выбран, пока шла активация — откатывает SAVEPOINT."""

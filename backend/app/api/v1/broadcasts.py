@@ -262,10 +262,12 @@ async def cancel_broadcast(
     broadcast = await db.get(Broadcast, broadcast_id)
     if broadcast is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Рассылка не найдена")
-    if broadcast.status != BroadcastStatus.SCHEDULED:
+    # Идущую рассылку тоже можно остановить: воркер бота проверяет статус
+    # после каждого сообщения и прекращает отправку на отменённой.
+    if broadcast.status not in (BroadcastStatus.SCHEDULED, BroadcastStatus.SENDING):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Рассылка уже отправляется или завершена — отменить нельзя",
+            "Рассылка уже завершена — отменить нельзя",
         )
     broadcast.status = BroadcastStatus.CANCELLED
     db.add(

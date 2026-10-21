@@ -115,20 +115,29 @@ def test_cancel_scheduled_broadcast(client: TestClient) -> None:
     assert listed[0]["status"] == "cancelled"
 
 
-async def test_cannot_cancel_already_sending(client: TestClient) -> None:
+async def _broadcast_with_status(status_: BroadcastStatus) -> int:
     async with SessionLocal() as db:
         b = Broadcast(
             text="x",
             segment="all",
-            status=BroadcastStatus.SENDING,
+            status=status_,
             scheduled_at=datetime.now(UTC),
             created_at=datetime.now(UTC),
         )
         db.add(b)
         await db.commit()
         await db.refresh(b)
-        bid = b.id
+        return b.id
 
+
+async def test_can_stop_broadcast_while_sending(client: TestClient) -> None:
+    # Воркер бота проверяет статус после каждого сообщения и останавливается.
+    bid = await _broadcast_with_status(BroadcastStatus.SENDING)
+    assert client.delete(f"/api/v1/broadcasts/{bid}").status_code == 204
+
+
+async def test_cannot_cancel_completed(client: TestClient) -> None:
+    bid = await _broadcast_with_status(BroadcastStatus.COMPLETED)
     assert client.delete(f"/api/v1/broadcasts/{bid}").status_code == 409
 
 

@@ -268,6 +268,7 @@ export interface ClientRow {
   created_at: string
   last_seen_at: string | null
   has_stopped_bot: boolean
+  is_blocked: boolean
 }
 
 export interface ClientDetail extends ClientRow {
@@ -561,6 +562,8 @@ export const panel = {
   client: (id: number) => api<ClientDetail>(`/bot/clients/${id}`),
   deleteClient: (id: number, withKeys: boolean) =>
     api<void>(`/bot/clients/${id}?with_keys=${withKeys}`, { method: 'DELETE' }),
+  setClientBlocked: (id: number, blocked: boolean) =>
+    api<ClientDetail>(`/bot/clients/${id}/block`, { method: 'POST', json: { blocked } }),
   adjustBalance: (id: number, json: { amount_rub: number; reason: string; notify: boolean }) =>
     api<ClientDetail>(`/bot/clients/${id}/balance`, { method: 'POST', json }),
   createPersonalPlan: (id: number, json: PlanInput) =>

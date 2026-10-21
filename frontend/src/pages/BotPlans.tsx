@@ -89,7 +89,7 @@ export function PlanForm({
         <Field label="Цена, ₽">
           <Input
             type="number"
-            min={0}
+            min={1}
             step="0.01"
             value={form.price_rub}
             onChange={(e) => set('price_rub', Number(e.target.value))}
@@ -551,6 +551,9 @@ export default function BotPlans() {
             Категория
           </Button>
         </div>
+        {remove.isError && (
+          <p className="mt-3 text-sm text-danger">{(remove.error as Error).message}</p>
+        )}
 
         {addingCategory && (
           <form

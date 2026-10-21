@@ -89,7 +89,40 @@ def build_dispatcher(*, storage: BaseStorage, config: Config) -> Dispatcher:
     dispatcher.include_router(admin.router)
     dispatcher.include_router(router)
     dispatcher.errors.register(on_error)
+    dispatcher.message.outer_middleware(block_banned)
+    dispatcher.callback_query.outer_middleware(block_banned)
+    dispatcher.pre_checkout_query.outer_middleware(block_banned)
     return dispatcher
+
+
+BANNED_TEXT = "Доступ к боту ограничен. Если это ошибка — напишите в поддержку."
+
+
+async def block_banned(handler, event, data):
+    """Не пускает к хендлерам клиентов, заблокированных в панели (Клиенты
+    бота → «Заблокировать») или перенесённых заблокированными из старого
+    бота. Раньше флаг is_blocked только исключал из рассылок, а сам бот
+    продолжал выдавать таким людям триал и принимать оплату."""
+    user = getattr(event, "from_user", None)
+    config: Config | None = data.get("config")
+    if user is None or (config is not None and user.id in config.admin_telegram_ids):
+        return await handler(event, data)
+    # Звёзды уже списаны — выдачу не прерываем, иначе деньги пропадут.
+    if isinstance(event, Message) and event.successful_payment is not None:
+        return await handler(event, data)
+    async with session() as db:
+        blocked = await db.scalar(
+            select(BotUser.is_blocked).where(BotUser.telegram_id == user.id)
+        )
+    if not blocked:
+        return await handler(event, data)
+    if isinstance(event, CallbackQuery):
+        await event.answer(BANNED_TEXT, show_alert=True)
+    elif isinstance(event, PreCheckoutQuery):
+        await event.answer(ok=False, error_message=BANNED_TEXT)
+    elif isinstance(event, Message) and event.chat.type == "private":
+        await event.answer(BANNED_TEXT)
+    return None
 
 
 async def on_error(event: ErrorEvent) -> bool:
@@ -1116,6 +1149,23 @@ async def cb_check_payment(callback: CallbackQuery, config: Config) -> None:
 
 @router.pre_checkout_query()
 async def on_pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
+    """Последний шанс отказать до списания звёзд: счёт уже оплачен (старое
+    сообщение-инвойс в истории чата) или его нет — иначе клиент платил бы
+    второй раз за то, что выдано не будет."""
+    payload = pre_checkout_query.invoice_payload
+    if payload.isdigit():
+        async with session() as db:
+            payment = await db.get(Payment, int(payload))
+            ok = (
+                payment is not None
+                and payment.provider == PaymentProvider.STARS
+                and payment.status == PaymentStatus.PENDING
+            )
+        if not ok:
+            await pre_checkout_query.answer(
+                ok=False, error_message="Этот счёт уже оплачен или устарел — откройте оплату заново"
+            )
+            return
     await pre_checkout_query.answer(ok=True)
 
 
@@ -1493,7 +1543,9 @@ async def cb_traffic_pick(callback: CallbackQuery, config: Config) -> None:
     if package is None:
         await callback.answer("Пакет больше не доступен", show_alert=True)
         return
-    if not config.any_payment_ready:
+    is_admin = callback.from_user.id in config.admin_telegram_ids
+    # Как и у тарифов: админу способ «бесплатно» доступен без платёжек.
+    if not config.any_payment_ready and not is_admin:
         await callback.answer("Приём оплаты ещё не настроен в панели", show_alert=True)
         return
 
@@ -1511,7 +1563,7 @@ async def cb_traffic_pick(callback: CallbackQuery, config: Config) -> None:
             purpose="traffic",
             target=f"{raw_id}-{package.id}",
             back=f"subtraffic:{raw_id}",
-            free=callback.from_user.id in config.admin_telegram_ids,
+            free=is_admin,
         ),
     )
     await callback.answer()

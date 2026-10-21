@@ -6,7 +6,7 @@ from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 
 from app.api.deps import CurrentAdmin, DbSession
 from app.core.config import settings
@@ -19,12 +19,44 @@ from shared.db.models import (
     BotConfig,
     BotState,
     EmojiMode,
+    Payment,
+    PaymentStatus,
     Plan,
     PlanCategory,
     TrafficPackage,
 )
 
 router = APIRouter(prefix="/bot", tags=["bot"])
+
+# Сколько ждать оплату по выставленному счёту: дольше провайдеры счета не
+# держат, а брошенные счета не должны вечно запрещать удаление тарифа.
+PENDING_PAYMENT_WINDOW = timedelta(hours=24)
+
+
+async def ensure_no_open_payments(db, condition, what: str) -> None:
+    """Не даёт удалить тариф или пакет, по которому есть неприменённая
+    оплата. После удаления ссылка в платеже обнуляется, и бот уже не знает,
+    что выдавать: клиент заплатил, а доступ не получает никогда."""
+    cutoff = datetime.now(UTC) - PENDING_PAYMENT_WINDOW
+    count = await db.scalar(
+        select(func.count())
+        .select_from(Payment)
+        .where(
+            condition,
+            Payment.applied_at.is_(None),
+            or_(
+                Payment.status == PaymentStatus.PAID,
+                (Payment.status == PaymentStatus.PENDING) & (Payment.created_at >= cutoff),
+            ),
+        )
+    )
+    if count:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"По этому {what} есть незавершённые оплаты ({count}). Отключите его "
+            "вместо удаления — клиенты не увидят его в боте, а начатые оплаты "
+            "довыдадутся. Удалить можно будет через сутки.",
+        )
 
 
 async def _config(db: DbSession) -> BotConfig:
@@ -518,10 +550,16 @@ async def set_emoji_mode(
     try:
         await telegram.check_premium_emoji(token, test_chat_id, _SAMPLE_EMOJI_ID)
     except TelegramError as exc:
+        was_premium = row.emoji_mode == EmojiMode.PREMIUM
         row.premium_available = False
         row.premium_checked_at = datetime.now(UTC)
         row.emoji_mode = EmojiMode.PLAIN
         await db.flush()
+        if was_premium:
+            # Режим сменился — бот должен перечитать конфиг, иначе продолжит
+            # слать премиум-эмодзи, которые у клиентов уже не рисуются.
+            await db.commit()
+            await bus.publish(bus.CMD_RELOAD)
         return EmojiModeOut(
             ok=False,
             message=(
@@ -548,7 +586,9 @@ async def set_emoji_mode(
 class PlanIn(BaseModel):
     title: str = Field(min_length=1, max_length=64)
     days: int = Field(ge=1, le=3650)
-    price_rub: float = Field(ge=0, le=1_000_000)
+    # Не меньше 1 ₽: бесплатный тариф бот всё равно не продаст (счёт на 0 ₽
+    # не примет ни одна платёжка), и в меню он висел бы «недоступным».
+    price_rub: float = Field(ge=1, le=1_000_000)
     squad_uuids: list[str] = Field(default_factory=list)
     hwid_limit: int = Field(default=3, ge=1, le=100)
     traffic_limit_bytes: int = Field(default=0, ge=0)
@@ -559,6 +599,8 @@ class PlanIn(BaseModel):
 
 class PlanOut(PlanIn):
     id: int
+    # Без ограничения из PlanIn: старые тарифы с ценой 0 должны читаться.
+    price_rub: float
 
 
 def _plan_out(plan: Plan) -> PlanOut:
@@ -714,6 +756,7 @@ async def update_plan(
 async def delete_plan(
     plan_id: int, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> None:
+    await ensure_no_open_payments(db, Payment.plan_id == plan_id, "тарифу")
     result = await db.execute(delete(Plan).where(Plan.id == plan_id))
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Тариф не найден")
@@ -726,13 +769,14 @@ async def delete_plan(
 class TrafficPackageIn(BaseModel):
     title: str = Field(min_length=1, max_length=64)
     traffic_gb: int = Field(ge=1, le=100_000)
-    price_rub: float = Field(ge=0, le=1_000_000)
+    price_rub: float = Field(ge=1, le=1_000_000)
     is_active: bool = True
     sort_order: int = 0
 
 
 class TrafficPackageOut(TrafficPackageIn):
     id: int
+    price_rub: float
 
 
 def _package_out(row: TrafficPackage) -> TrafficPackageOut:
@@ -803,6 +847,7 @@ async def update_traffic_package(
 async def delete_traffic_package(
     package_id: int, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> None:
+    await ensure_no_open_payments(db, Payment.traffic_package_id == package_id, "пакету")
     result = await db.execute(delete(TrafficPackage).where(TrafficPackage.id == package_id))
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Пакет не найден")

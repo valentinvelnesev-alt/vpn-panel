@@ -322,7 +322,8 @@ async def grant_trial(db: AsyncSession, config: Config, user: BotUser) -> BotUse
 
     # Приведённый по реферальной ссылке получает бонусные дни сразу к
     # триалу — отдельный вызов Remnawave тут не нужен, сквады те же.
-    bonus = config.referral_bonus_days if user.referred_by_id else 0
+    # Бонусные дни — часть программы «дни за друга», не денежной комиссии.
+    bonus = config.referral_bonus_days if user.referred_by_id and config.referral_enabled else 0
     days = config.trial_days + bonus
     expire_at = datetime.now(UTC) + timedelta(days=days)
 

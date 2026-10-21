@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import html
 import logging
 
 from app import config as config_module
@@ -47,6 +48,9 @@ async def run_once() -> None:
         return
 
     for node in nodes:
+        # Имя и адрес задаёт админ панели — «<» в них ломал HTML-разметку,
+        # и Telegram отклонял алерт целиком.
+        label = f"<b>{html.escape(node.name or '')}</b> ({html.escape(node.address or '')})"
         online = node.is_online
         was_online = _last_online.get(node.uuid)
         _last_online[node.uuid] = online
@@ -54,13 +58,13 @@ async def run_once() -> None:
             await send(
                 config.token,
                 chat_id,
-                f"⚠️ Нода <b>{node.name}</b> ({node.address}) недоступна.",
+                f"⚠️ Нода {label} недоступна.",
             )
         elif was_online is False and online is True:
             await send(
                 config.token,
                 chat_id,
-                f"✅ Нода <b>{node.name}</b> ({node.address}) снова на связи.",
+                f"✅ Нода {label} снова на связи.",
             )
 
 

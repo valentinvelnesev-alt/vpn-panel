@@ -74,14 +74,21 @@ function BroadcastCard({
             {dateTime(live.scheduled_at)}
           </p>
         </div>
-        {live.status === 'scheduled' && (
-          <Button variant="ghost" className="h-8 px-2 text-danger" onClick={() => onCancel(live.id)}>
+        {(live.status === 'scheduled' || live.status === 'sending') && (
+          <Button
+            variant="ghost"
+            className="h-8 px-2 text-danger"
+            title={live.status === 'sending' ? 'Остановить рассылку' : 'Отменить рассылку'}
+            onClick={() => onCancel(live.id)}
+          >
             <Trash2 className="size-4" />
           </Button>
         )}
       </div>
 
-      {(live.status === 'sending' || live.status === 'completed') && (
+      {(live.status === 'sending' ||
+        live.status === 'completed' ||
+        (live.status === 'cancelled' && live.sent_count + live.failed_count > 0)) && (
         <div className="mt-3">
           <div className="h-1.5 overflow-hidden rounded-full bg-bg">
             <div

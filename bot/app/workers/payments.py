@@ -31,8 +31,14 @@ async def run_once() -> int:
                 )
             )
         )
+    # Каждый платёж — отдельно: сбой Remnawave или битые данные у одного не
+    # должны каждую минуту обрывать проход и оставлять без доступа тех, кто
+    # оплатил после него.
     for payment_id in ids:
-        await payment_processor.handle(payment_id)
+        try:
+            await payment_processor.handle(payment_id)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось дообработать оплату %s", payment_id)
     return len(ids)
 
 

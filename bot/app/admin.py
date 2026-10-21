@@ -504,6 +504,10 @@ async def on_promo_code_input(message: Message, state: FSMContext, config: Confi
     if not code or not all(c.isalnum() or c in "_-" for c in code):
         await message.answer("Только буквы, цифры, «_» и «-». Введите код ещё раз:")
         return
+    if len(code) > 32:
+        # Колонка code — String(32): длиннее Postgres не сохранит.
+        await message.answer("Код не длиннее 32 символов. Введите код ещё раз:")
+        return
 
     async with session() as db:
         exists = await db.scalar(select(PromoCode).where(PromoCode.code == code))

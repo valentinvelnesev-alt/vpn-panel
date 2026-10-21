@@ -16,7 +16,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentAdmin, DbSession
-from app.api.v1.bot import PlanIn, PlanOut, _plan_out
+from app.api.v1.bot import PlanIn, PlanOut, _plan_out, ensure_no_open_payments
 from app.services import telegram
 from shared.crypto import decrypt
 from shared.db.models import (
@@ -24,6 +24,7 @@ from shared.db.models import (
     BotConfig,
     BotSubscription,
     BotUser,
+    Payment,
     Plan,
     Purchase,
     Wallet,
@@ -45,6 +46,8 @@ class ClientRow(BaseModel):
     created_at: datetime
     last_seen_at: datetime | None
     has_stopped_bot: bool
+    # Заблокирован администратором: бот не отвечает ему и не выдаёт доступ.
+    is_blocked: bool = False
 
 
 class ClientPage(BaseModel):
@@ -165,6 +168,7 @@ def _row(user: BotUser, balance_kopeks: int, subscriptions: int) -> ClientRow:
         created_at=user.created_at,
         last_seen_at=user.last_seen_at,
         has_stopped_bot=user.has_stopped_bot,
+        is_blocked=user.is_blocked,
     )
 
 
@@ -311,6 +315,28 @@ async def _notify(db: AsyncSession, user: BotUser, text: str) -> None:
         pass
 
 
+# ── Блокировка ────────────────────────────────────────────────────────
+class BlockIn(BaseModel):
+    blocked: bool
+
+
+@router.post("/{client_id}/block", response_model=ClientDetail)
+async def set_blocked(
+    client_id: int, data: BlockIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> ClientDetail:
+    """Бан в боте: заблокированному бот не отвечает, триал и покупки ему
+    недоступны, рассылки и напоминания не приходят. Уже выданные ключи не
+    трогает — их при необходимости отключают в разделе «Пользователи»."""
+    user = await _get_user(db, client_id)
+    user.is_blocked = data.blocked
+    _audit(
+        db, admin, "client.block" if data.blocked else "client.unblock", request,
+        str(user.telegram_id),
+    )
+    await db.flush()
+    return await _detail(db, user)
+
+
 # ── Персональные тарифы ───────────────────────────────────────────────
 async def _own_plan(db: AsyncSession, user: BotUser, plan_id: int) -> Plan:
     plan = await db.get(Plan, plan_id)
@@ -371,6 +397,7 @@ async def delete_personal_plan(
 ) -> None:
     user = await _get_user(db, client_id)
     plan = await _own_plan(db, user, plan_id)
+    await ensure_no_open_payments(db, Payment.plan_id == plan.id, "тарифу")
     await db.delete(plan)
     _audit(db, admin, "client.plan.delete", request, str(user.telegram_id), plan_id=plan_id)
 

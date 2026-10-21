@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Contact, Plus, Search, Star, Trash2, Wallet } from 'lucide-react'
+import { Ban, Contact, Plus, Search, Star, Trash2, Wallet } from 'lucide-react'
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
 import { Button, Card, Field, Input } from '@/components/ui'
@@ -204,6 +204,7 @@ function PersonalPlans({ client }: { client: ClientDetail }) {
           </div>
         ),
       )}
+      {remove.isError && <p className="text-sm text-danger">{(remove.error as Error).message}</p>}
       {editing === 'new' ? (
         <PlanForm
           personal
@@ -273,6 +274,31 @@ function DeleteClient({ client, onDeleted }: { client: ClientDetail; onDeleted: 
   )
 }
 
+function BlockClient({ client }: { client: ClientDetail }) {
+  const queryClient = useQueryClient()
+  const toggle = useMutation({
+    mutationFn: () => panel.setClientBlocked(client.id, !client.is_blocked),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['client', client.id], updated)
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+    },
+  })
+  return (
+    <div className="space-y-1">
+      <Button
+        variant="ghost"
+        className={client.is_blocked ? undefined : 'text-danger'}
+        disabled={toggle.isPending}
+        onClick={() => toggle.mutate()}
+      >
+        <Ban className="size-4" />
+        {client.is_blocked ? 'Разблокировать в боте' : 'Заблокировать в боте'}
+      </Button>
+      {toggle.isError && <p className="text-sm text-danger">{(toggle.error as Error).message}</p>}
+    </div>
+  )
+}
+
 function ClientModal({ id, onClose }: { id: number; onClose: () => void }) {
   const { data: client, isPending } = useQuery({
     queryKey: ['client', id],
@@ -315,6 +341,11 @@ function ClientModal({ id, onClose }: { id: number; onClose: () => void }) {
               )}
               {client.has_stopped_bot && (
                 <div className="col-span-2 text-danger">Клиент заблокировал бота</div>
+              )}
+              {client.is_blocked && (
+                <div className="col-span-2 text-danger">
+                  Заблокирован в боте: бот ему не отвечает, покупки недоступны
+                </div>
               )}
             </dl>
             <div className="space-y-1">
@@ -374,7 +405,8 @@ function ClientModal({ id, onClose }: { id: number; onClose: () => void }) {
             )}
           </Section>
 
-          <div className="lg:col-span-2">
+          <div className="flex flex-wrap items-start gap-2 lg:col-span-2">
+            <BlockClient client={client} />
             <DeleteClient client={client} onDeleted={onClose} />
           </div>
 

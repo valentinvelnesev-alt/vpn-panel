@@ -277,30 +277,48 @@ class Supervisor:
         # их pub-sub уведомления пропали вместе с недоступным подписчиком.
         await self._catch_up_payments()
 
-        async for message in bus.listen():
-            command = message.get("command")
-            log.info("Команда из панели: %s", command)
+        # Обрыв связи с Redis (рестарт контейнера, сеть) завершает подписку
+        # исключением. Раньше на этом цикл команд умирал насовсем: бот
+        # продолжал polling, но не слышал панель до перезапуска контейнера.
+        delay = 1
+        while True:
             try:
-                if command == bus.CMD_START:
-                    await self.start()
-                elif command == bus.CMD_STOP:
-                    await self.stop()
-                elif command == bus.CMD_RELOAD:
-                    await self.reload()
-                elif command == bus.EVENT_PAYMENT_COMPLETED:
-                    # Обрабатывается независимо от self._task: доступ клиента
-                    # к VPN не должен ждать, пока админ снова включит бота.
-                    from app.services.payment_processor import handle
+                async for message in bus.listen():
+                    delay = 1
+                    await self._handle_command(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Потеряна связь с Redis (%s), переподключаюсь через %s с", exc, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30)
+            # Пока подписки не было, события оплат могли пропасть.
+            await self._catch_up_payments()
 
-                    await handle(message["payment_id"])
-                elif command == bus.EVENT_BROADCAST_READY:
-                    # Только будим воркер: отправка здесь, в цикле команд,
-                    # блокировала шину на всё время рассылки.
-                    from app.workers.broadcast import wakeup
+    async def _handle_command(self, message: dict) -> None:
+        command = message.get("command")
+        log.info("Команда из панели: %s", command)
+        try:
+            if command == bus.CMD_START:
+                await self.start()
+            elif command == bus.CMD_STOP:
+                await self.stop()
+            elif command == bus.CMD_RELOAD:
+                await self.reload()
+            elif command == bus.EVENT_PAYMENT_COMPLETED:
+                # Обрабатывается независимо от self._task: доступ клиента
+                # к VPN не должен ждать, пока админ снова включит бота.
+                from app.services.payment_processor import handle
 
-                    wakeup.set()
-            except Exception:  # noqa: BLE001
-                log.exception("Ошибка при обработке команды %s", command)
+                await handle(message["payment_id"])
+            elif command == bus.EVENT_BROADCAST_READY:
+                # Только будим воркер: отправка здесь, в цикле команд,
+                # блокировала шину на всё время рассылки.
+                from app.workers.broadcast import wakeup
+
+                wakeup.set()
+        except Exception:  # noqa: BLE001
+            log.exception("Ошибка при обработке команды %s", command)
 
     async def _catch_up_payments(self) -> None:
         from app.workers.payments import run_once

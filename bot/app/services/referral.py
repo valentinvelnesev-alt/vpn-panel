@@ -45,7 +45,10 @@ async def attach_referrer(
     Только для новых: у пользователя, который уже что-то делал в боте,
     менять реферера поздно и небезопасно (пришёл бы за бонусом задним числом).
     """
-    if not config.referral_enabled or user.referred_by_id is not None:
+    # Привязка нужна обеим программам: и дням за первую оплату, и денежной
+    # комиссии. Раньше проверялись только дни — при включённой одной
+    # комиссии приглашённые не привязывались и комиссия не шла никогда.
+    if not config.referral_visible or user.referred_by_id is not None:
         return None
     if user.trial_used or user.expire_at is not None:
         return None  # уже не «новый» пользователь
