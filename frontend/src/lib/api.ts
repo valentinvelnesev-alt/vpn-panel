@@ -58,6 +58,18 @@ export async function api<T>(
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
 }
 
+export interface BackupFile {
+  name: string
+  size_bytes: number
+  created_at: string
+}
+
+export interface BackupSchedule {
+  enabled: boolean
+  interval_hours: number
+  keep: number
+}
+
 export interface Admin {
   id: number
   login: string
@@ -77,6 +89,8 @@ export const auth = {
     api<Admin>('/auth/login', { method: 'POST', json: { login, password, totp_code } }),
   logout: () => api<void>('/auth/logout', { method: 'POST' }),
   logoutAll: () => api<void>('/auth/logout-all', { method: 'POST' }),
+  changePassword: (current_password: string, new_password: string) =>
+    api<Admin>('/auth/password', { method: 'POST', json: { current_password, new_password } }),
   totpSetup: () => api<TotpSetup>('/auth/totp/setup', { method: 'POST' }),
   totpEnable: (code: string) =>
     api<Admin>('/auth/totp/enable', { method: 'POST', json: { code } }),
@@ -334,6 +348,7 @@ export interface Providers {
   cryptobot_enabled: boolean
   cryptobot_token_masked: string | null
   stars_enabled: boolean
+  stars_rub_per_star: number
   webhook_urls: Record<string, string>
 }
 
@@ -605,7 +620,7 @@ export const panel = {
     api<Providers>('/payments/providers/rollypay', { method: 'PUT', json }),
   saveCryptoBot: (json: { enabled: boolean; token: string }) =>
     api<Providers>('/payments/providers/cryptobot', { method: 'PUT', json }),
-  saveStars: (json: { enabled: boolean }) =>
+  saveStars: (json: { enabled: boolean; rub_per_star?: number }) =>
     api<Providers>('/payments/providers/stars', { method: 'PUT', json }),
   payments: (limit = 50) => api<PaymentRow[]>(`/payments?limit=${limit}`),
 
@@ -668,6 +683,34 @@ export const panel = {
       throw new ApiError(res.status, detail?.detail ?? `Ошибка ${res.status}`)
     }
     return (await res.json()) as ImportReport
+  },
+
+  backups: () =>
+    api<{ files: BackupFile[]; schedule: BackupSchedule; busy: boolean }>('/backups'),
+  runBackup: () => api<BackupFile>('/backups/run', { method: 'POST' }),
+  saveBackupSchedule: (json: BackupSchedule) =>
+    api<BackupSchedule>('/backups/schedule', { method: 'PUT', json }),
+  deleteBackup: (name: string) =>
+    api<void>(`/backups/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  backupDownloadUrl: (name: string) => `/api/v1/backups/${encodeURIComponent(name)}/download`,
+  restoreBackup: (name: string, confirm: string) =>
+    api<{ ok: boolean; message: string; safety_backup: string }>(
+      `/backups/${encodeURIComponent(name)}/restore`,
+      { method: 'POST', json: { confirm } },
+    ),
+  uploadBackup: async (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/v1/backups/upload', {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new ApiError(res.status, detail?.detail ?? `Ошибка ${res.status}`)
+    }
+    return (await res.json()) as BackupFile
   },
 
   publicBrand: () => api<PublicBrand>('/settings/brand/public'),

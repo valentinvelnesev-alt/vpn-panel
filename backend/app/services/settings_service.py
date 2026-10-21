@@ -34,6 +34,10 @@ CRYPTOBOT_ENABLED: Final = "payment_cryptobot_enabled"
 CRYPTOBOT_TOKEN: Final = "payment_cryptobot_token"
 
 STARS_ENABLED: Final = "payment_stars_enabled"
+# Сколько рублей стоит одна звезда при выставлении счёта. Официального
+# курса нет — его задаёт владелец панели.
+STARS_RUB_PER_STAR: Final = "payment_stars_rub_per_star"
+DEFAULT_RUB_PER_STAR: Final = 1.8
 
 SECRET_KEYS: Final = frozenset(
     {

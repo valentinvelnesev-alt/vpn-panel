@@ -20,7 +20,17 @@ log = logging.getLogger("panel")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Панель запускается (режим: %s)", settings.deploy_mode)
+    import asyncio
+
+    from app.services import backups
+
+    scheduler = asyncio.create_task(backups.scheduler())
     yield
+    scheduler.cancel()
+    try:
+        await scheduler
+    except asyncio.CancelledError:
+        pass
     from app.db.session import engine
     from app.services import cache, remnawave_provider
 

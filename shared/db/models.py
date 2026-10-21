@@ -37,6 +37,11 @@ class Admin(Base, TimestampMixin):
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # Входит в каждый access-токен. «Выйти везде» и смена пароля увеличивают
+    # её — уже выданные токены перестают действовать сразу, а не через час.
+    token_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
 
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="admin", cascade="all, delete-orphan"

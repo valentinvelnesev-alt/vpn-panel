@@ -14,6 +14,7 @@ import { DEFAULT_TITLE } from '@/lib/brand'
 import { cn } from '@/lib/cn'
 import { setNavStyle, useNavStyle, type NavStyle } from '@/lib/navStyle'
 import { usePanelTerms } from '@/lib/panelKind'
+import { BackupsCard } from './SettingsBackups'
 
 function AppearanceCard() {
   const current = useNavStyle()
@@ -115,6 +116,73 @@ function BrandCard() {
         </Button>
       </form>
     </Card>
+  )
+}
+
+function PasswordForm() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [repeat, setRepeat] = useState('')
+  const change = useMutation({
+    mutationFn: () => auth.changePassword(current, next),
+    onSuccess: () => {
+      setCurrent('')
+      setNext('')
+      setRepeat('')
+    },
+  })
+  const mismatch = repeat.length > 0 && next !== repeat
+  const tooShort = next.length > 0 && next.length < 12
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault()
+        change.mutate()
+      }}
+    >
+      <h3 className="text-sm font-medium">Смена пароля</h3>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Текущий пароль">
+          <Input
+            type="password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+          />
+        </Field>
+        <Field label="Новый пароль" hint={tooShort ? 'Не короче 12 символов' : undefined}>
+          <Input
+            type="password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+        <Field label="Ещё раз" hint={mismatch ? 'Пароли не совпадают' : undefined}>
+          <Input
+            type="password"
+            value={repeat}
+            onChange={(e) => setRepeat(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+      </div>
+      {change.isError && <p className="text-sm text-danger">{(change.error as Error).message}</p>}
+      {change.isSuccess && (
+        <p className="text-sm text-success">
+          Пароль изменён. Остальные устройства вышли из панели.
+        </p>
+      )}
+      <Button
+        type="submit"
+        variant="ghost"
+        disabled={!current || next.length < 12 || next !== repeat || change.isPending}
+      >
+        Сменить пароль
+      </Button>
+    </form>
   )
 }
 
@@ -276,6 +344,9 @@ function SecurityCard() {
       )}
 
       <hr className="my-5" />
+      <PasswordForm />
+
+      <hr className="my-5" />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">
           Завершить все сессии панели — на всех браузерах и устройствах.
@@ -431,6 +502,8 @@ export default function Settings() {
       <SecurityCard />
 
       <BrandCard />
+
+      <BackupsCard />
 
       <ImportCard />
 

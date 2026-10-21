@@ -31,9 +31,23 @@ def test_providers_start_disabled(client: TestClient) -> None:
         "cryptobot_enabled": False,
         "cryptobot_token_masked": None,
         "stars_enabled": False,
+        "stars_rub_per_star": 1.8,
     }
     # Адреса колбэков собираются от публичного адреса панели.
     assert webhook_urls["rollypay"].endswith("/api/v1/webhooks/rollypay")
+
+
+def test_stars_rate_saved(client: TestClient) -> None:
+    body = client.put(
+        "/api/v1/payments/providers/stars", json={"enabled": True, "rub_per_star": 1.45}
+    ).json()
+    assert body["stars_enabled"] is True
+    assert body["stars_rub_per_star"] == 1.45
+    # Только переключатель — курс остаётся прежним.
+    body = client.put("/api/v1/payments/providers/stars", json={"enabled": False}).json()
+    assert body["stars_rub_per_star"] == 1.45
+    bad = client.put("/api/v1/payments/providers/stars", json={"enabled": True, "rub_per_star": 0})
+    assert bad.status_code == 422
 
 
 def test_save_platega_masks_secret(client: TestClient) -> None:

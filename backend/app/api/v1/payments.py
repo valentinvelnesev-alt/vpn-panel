@@ -23,6 +23,7 @@ class ProvidersOut(BaseModel):
     cryptobot_enabled: bool
     cryptobot_token_masked: str | None
     stars_enabled: bool
+    stars_rub_per_star: float = cfg.DEFAULT_RUB_PER_STAR
     # Адреса колбэков — их нужно вписать в кабинете провайдера вручную,
     # при создании платежа они не передаются.
     webhook_urls: dict[str, str] = {}
@@ -54,6 +55,7 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         cfg.CRYPTOBOT_ENABLED,
         cfg.CRYPTOBOT_TOKEN,
         cfg.STARS_ENABLED,
+        cfg.STARS_RUB_PER_STAR,
     )
     return ProvidersOut(
         platega_enabled=values[cfg.PLATEGA_ENABLED] == "true",
@@ -73,6 +75,7 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         if values[cfg.CRYPTOBOT_TOKEN]
         else None,
         stars_enabled=values[cfg.STARS_ENABLED] == "true",
+        stars_rub_per_star=float(values[cfg.STARS_RUB_PER_STAR] or cfg.DEFAULT_RUB_PER_STAR),
         webhook_urls=_webhook_urls(),
     )
 
@@ -186,6 +189,8 @@ async def save_cryptobot(
 
 class StarsIn(BaseModel):
     enabled: bool
+    # Пусто — оставить прежний курс.
+    rub_per_star: float | None = Field(default=None, ge=0.1, le=100)
 
 
 @router.put("/providers/stars", response_model=ProvidersOut)
@@ -193,6 +198,8 @@ async def save_stars(
     data: StarsIn, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> ProvidersOut:
     await cfg.set_(db, cfg.STARS_ENABLED, "true" if data.enabled else "false")
+    if data.rub_per_star is not None:
+        await cfg.set_(db, cfg.STARS_RUB_PER_STAR, str(round(data.rub_per_star, 4)))
     db.add(
         AuditLog(
             admin_id=admin.id,

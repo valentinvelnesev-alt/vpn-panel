@@ -35,7 +35,9 @@ async def check_and_apply(payment_id: int) -> bool:
         if payment.status == PaymentStatus.PAID:
             already_applied = payment.applied_at is not None
         else:
-            if payment.status != PaymentStatus.PENDING:
+            # Истёкший — это «давно не платили», а не «отклонён»: клиент мог
+            # оплатить поздно, поэтому провайдера всё равно спрашиваем.
+            if payment.status not in (PaymentStatus.PENDING, PaymentStatus.EXPIRED):
                 return False
             config = await config_module.load(db)
             paid = await _is_paid_at_provider(config, payment)

@@ -199,6 +199,7 @@ class Config:
     cryptobot_enabled: bool = False
     cryptobot_token: str | None = None
     stars_enabled: bool = False
+    stars_rub_per_star: float = 1.8
 
     # SOCKS5-прокси до Telegram; None — напрямую.
     proxy: str | None = None
@@ -285,6 +286,14 @@ class Config:
         return next((p for p in self.traffic_packages if p.id == package_id), None)
 
 
+def _float(value: str | None, default: float) -> float:
+    try:
+        number = float(value) if value else default
+    except ValueError:
+        return default
+    return number if number > 0 else default
+
+
 async def load(db: AsyncSession) -> Config:
     row = await db.get(BotConfig, 1)
     if row is None:
@@ -320,6 +329,7 @@ async def load(db: AsyncSession) -> Config:
         "payment_cryptobot_enabled",
         "payment_cryptobot_token",
         "payment_stars_enabled",
+        "payment_stars_rub_per_star",
     ]
     settings_rows = await db.scalars(select(Setting).where(Setting.key.in_(keys)))
     raw = {
@@ -379,5 +389,6 @@ async def load(db: AsyncSession) -> Config:
         cryptobot_enabled=flag("payment_cryptobot_enabled"),
         cryptobot_token=raw.get("payment_cryptobot_token"),
         stars_enabled=flag("payment_stars_enabled"),
+        stars_rub_per_star=_float(raw.get("payment_stars_rub_per_star"), 1.8),
         loaded_at=datetime.now(),
     )

@@ -1,5 +1,7 @@
 # Контекст сборки — корень репозитория (нужен shared/).
-FROM python:3.12-slim AS base
+# trixie: postgresql-client 17 — та же версия, что у Postgres (pg_dump версии
+# ниже сервера отказывается делать копию).
+FROM python:3.12-slim-trixie AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -12,7 +12,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.services import payment_check
 from shared.db.models import Payment, PaymentProvider, PaymentStatus
@@ -23,12 +23,28 @@ log = logging.getLogger("bot.workers.payment_polling")
 CHECK_INTERVAL = 30
 # Не спрашиваем провайдера бесконечно долго — счета живут не более пары часов.
 MAX_AGE = timedelta(hours=6)
+# Неоплаченный счёт старше суток помечается истёкшим — чтобы журнал платежей
+# и статистика не копили вечные «ожидает». Опоздавший вебхук или кнопка
+# «Проверить оплату» всё равно засчитают его (см. webhooks.py, payment_check.py).
+EXPIRE_AFTER = timedelta(hours=24)
 
 _EXTERNAL_PROVIDERS = (
     PaymentProvider.PLATEGA,
     PaymentProvider.ROLLYPAY,
     PaymentProvider.CRYPTOBOT,
 )
+
+
+async def expire_stale() -> int:
+    cutoff = datetime.now(UTC) - EXPIRE_AFTER
+    async with session() as db:
+        result = await db.execute(
+            update(Payment)
+            .where(Payment.status == PaymentStatus.PENDING, Payment.created_at < cutoff)
+            .values(status=PaymentStatus.EXPIRED)
+            .execution_options(synchronize_session=False)
+        )
+    return result.rowcount or 0
 
 
 async def run_once() -> int:
@@ -59,6 +75,9 @@ async def worker() -> None:
             applied = await run_once()
             if applied:
                 log.info("Подтверждено опросом провайдеров: %s", applied)
+            expired = await expire_stale()
+            if expired:
+                log.info("Помечено истёкшими неоплаченных счетов: %s", expired)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

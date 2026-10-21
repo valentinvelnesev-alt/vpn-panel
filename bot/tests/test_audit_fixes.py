@@ -261,3 +261,89 @@ async def test_regular_and_admin_users_pass(db, answers) -> None:
     await db.commit()
     assert await _run(_callback(), make_config(admin_telegram_ids=[77])) is True
     assert answers == []
+
+
+# ── Улучшения: имя ключа по оплате, курс Stars, истёкшие счета ────────
+def test_paid_key_username_is_stable_per_payment() -> None:
+    assert subs._new_key_username(5, 42) == subs._new_key_username(5, 42) == "tg_5_p42"
+    # Без оплаты (баланс, админ) — случайный суффикс, как раньше.
+    assert subs._new_key_username(5) != subs._new_key_username(5)
+
+
+def test_stars_rate_from_panel() -> None:
+    from app.services import stars
+
+    assert stars.rub_to_stars(199) == 111  # курс по умолчанию 1.8
+    assert stars.rub_to_stars(199, 1.0) == 199
+    assert stars.rub_to_stars(0.5, 2.0) == 1  # меньше звезды не бывает
+
+
+async def test_stale_pending_payments_expire(db) -> None:
+    from datetime import timedelta
+
+    from app.workers import payment_polling
+
+    user = BotUser(telegram_id=3)
+    db.add(user)
+    await db.flush()
+    old = Payment(
+        user_id=user.id,
+        provider=PaymentProvider.PLATEGA,
+        external_id="old",
+        amount_kopeks=100,
+        purpose=PaymentPurpose.TOPUP,
+        created_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    fresh = Payment(
+        user_id=user.id,
+        provider=PaymentProvider.PLATEGA,
+        external_id="fresh",
+        amount_kopeks=100,
+        purpose=PaymentPurpose.TOPUP,
+    )
+    db.add_all([old, fresh])
+    await db.commit()
+
+    assert await payment_polling.expire_stale() == 1
+    await db.refresh(old)
+    await db.refresh(fresh)
+    assert old.status == PaymentStatus.EXPIRED
+    assert fresh.status == PaymentStatus.PENDING
+
+
+async def test_late_payment_on_expired_invoice_still_applies(db, monkeypatch) -> None:
+    from app.services import payment_check
+
+    user = BotUser(telegram_id=4)
+    db.add(user)
+    await db.flush()
+    payment = Payment(
+        user_id=user.id,
+        provider=PaymentProvider.PLATEGA,
+        external_id="late",
+        amount_kopeks=100,
+        purpose=PaymentPurpose.TOPUP,
+        status=PaymentStatus.EXPIRED,
+    )
+    db.add(payment)
+    await db.commit()
+
+    async def fake_load(_db):
+        return make_config()
+
+    async def paid(config, p) -> bool:
+        return True
+
+    handled: list[int] = []
+
+    async def fake_handle(payment_id: int) -> None:
+        handled.append(payment_id)
+
+    monkeypatch.setattr("app.config.load", fake_load)
+    monkeypatch.setattr(payment_check, "_is_paid_at_provider", paid)
+    monkeypatch.setattr(payment_processor, "handle", fake_handle)
+
+    assert await payment_check.check_and_apply(payment.id) is True
+    await db.refresh(payment)
+    assert payment.status == PaymentStatus.PAID
+    assert handled == [payment.id]

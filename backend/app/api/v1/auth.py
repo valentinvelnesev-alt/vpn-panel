@@ -82,7 +82,7 @@ async def _issue_session(
             ip=request.client.host if request.client else None,
         )
     )
-    _set_auth_cookies(response, create_access_token(admin.id), token)
+    _set_auth_cookies(response, create_access_token(admin.id, admin.token_version), token)
 
 
 def _client_ip(request: Request) -> str:
@@ -302,9 +302,8 @@ async def totp_disable(
     return admin
 
 
-@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
-async def logout_all(admin: CurrentAdmin, response: Response, db: DbSession) -> None:
-    """Завершает все сессии этого администратора на всех устройствах."""
+async def _revoke_all_sessions(db: DbSession, admin: Admin) -> None:
+    """Гасит все refresh-токены и уже выданные access-токены админа."""
     now = datetime.now(UTC)
     tokens = await db.scalars(
         select(RefreshToken).where(
@@ -313,5 +312,47 @@ async def logout_all(admin: CurrentAdmin, response: Response, db: DbSession) -> 
     )
     for token in tokens:
         token.revoked_at = now
+    admin.token_version += 1
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(admin: CurrentAdmin, response: Response, db: DbSession) -> None:
+    """Завершает все сессии этого администратора на всех устройствах."""
+    await _revoke_all_sessions(db, admin)
     response.delete_cookie(ACCESS_COOKIE, path="/")
     response.delete_cookie(REFRESH_COOKIE, path="/")
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
+@router.post("/password", response_model=AdminOut)
+async def change_password(
+    data: PasswordChangeIn,
+    admin: CurrentAdmin,
+    request: Request,
+    response: Response,
+    db: DbSession,
+) -> Admin:
+    """Смена пароля. Все остальные сессии завершаются — если пароль
+    утёк, вошедший по нему теряет доступ сразу; эта сессия продолжается."""
+    if not verify_password(data.current_password, admin.password_hash):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Текущий пароль неверный")
+    if data.new_password == data.current_password:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Новый пароль совпадает с текущим"
+        )
+    admin.password_hash = hash_password(data.new_password)
+    await _revoke_all_sessions(db, admin)
+    await _issue_session(db, admin, request, response)
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="password.change",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    return admin

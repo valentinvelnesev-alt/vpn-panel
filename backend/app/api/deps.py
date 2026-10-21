@@ -30,6 +30,9 @@ async def get_current_admin(
     admin = await db.get(Admin, int(payload["sub"]))
     if admin is None or not admin.is_active:
         raise _UNAUTHORIZED
+    # Сессии отозваны («Выйти везде», смена пароля) — токен больше не годится.
+    if payload.get("ver", 0) != admin.token_version:
+        raise _UNAUTHORIZED
     return admin
 
 

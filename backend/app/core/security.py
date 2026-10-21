@@ -35,10 +35,11 @@ def needs_rehash(password_hash: str) -> bool:
 
 
 # ── JWT ───────────────────────────────────────────────────────────────
-def create_access_token(admin_id: int) -> str:
+def create_access_token(admin_id: int, version: int = 0) -> str:
     now = datetime.now(UTC)
     payload = {
         "sub": str(admin_id),
+        "ver": version,
         "type": "access",
         "iat": now,
         "exp": now + timedelta(minutes=settings.access_token_ttl_minutes),

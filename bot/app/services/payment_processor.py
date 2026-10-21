@@ -167,6 +167,7 @@ async def _apply(payment_id: int) -> Applied | None:
                     plan,
                     source=str(payment.provider),
                     amount_kopeks=payment.amount_kopeks,
+                    payment_id=payment.id,
                 )
             until = subscription.expire_at
             # Скидка из промокода — на одну покупку.

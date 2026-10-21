@@ -1109,7 +1109,7 @@ async def _pay_with_stars(
         await db.flush()
         payment_id = payment.id
 
-    amount_stars = stars.rub_to_stars(amount_kopeks / 100)
+    amount_stars = stars.rub_to_stars(amount_kopeks / 100, config.stars_rub_per_star)
     try:
         await callback.message.delete()
     except TelegramBadRequest:
@@ -1211,7 +1211,7 @@ async def _legacy_stars_payment(db, config: Config, message: Message, payload: s
     pay = await _resolve_pay_target(db, config, user, purpose, str(data.get("target", "")))
     amount_kopeks = pay.amount_kopeks
     if purpose == "topup":
-        amount_kopeks = round(message.successful_payment.total_amount * stars.RUB_PER_STAR * 100)
+        amount_kopeks = round(message.successful_payment.total_amount * config.stars_rub_per_star * 100)
     elif not pay.ok:
         return None
     payment = Payment(

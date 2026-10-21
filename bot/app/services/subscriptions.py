@@ -7,6 +7,7 @@
 import html
 import logging
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -145,9 +146,14 @@ def _username_for(telegram_id: int) -> str:
     return f"tg_{telegram_id}"
 
 
-def _new_key_username(telegram_id: int) -> str:
+def _new_key_username(telegram_id: int, payment_id: int | None = None) -> str:
     # Для дополнительных ключей нужна ГЛОБАЛЬНО уникальная строка — иначе
     # второй ключ того же пользователя столкнётся по username с первым.
+    # Ключ по внешней оплате называется по её id: если после создания ключа
+    # упала запись в БД, повторная обработка той же оплаты наткнётся на
+    # занятое имя и подхватит уже созданный аккаунт, а не заведёт второй.
+    if payment_id is not None:
+        return f"tg_{telegram_id}_p{payment_id}"
     return f"tg_{telegram_id}_{secrets.token_hex(3)}"
 
 
@@ -509,6 +515,25 @@ async def reconcile_deleted_clients(
     return removed
 
 
+# Сверка с 3x-ui тянет весь список клиентов панели. На каждое открытие
+# меню это лишняя нагрузка на больших базах: для одного клиента достаточно
+# раза в минуту (полная сверка всех и так идёт фоном, см. panel_sync).
+RECONCILE_EVERY = 60.0
+_last_reconcile: dict[int, float] = {}
+
+
+def _reconcile_due(user_id: int) -> bool:
+    if panel_type() != XUI:
+        return True  # для Remnawave сверка — пустая операция
+    now = time.monotonic()
+    if now - _last_reconcile.get(user_id, float("-inf")) < RECONCILE_EVERY:
+        return False
+    if len(_last_reconcile) > 50_000:
+        _last_reconcile.clear()
+    _last_reconcile[user_id] = now
+    return True
+
+
 async def link_from_remnawave(
     db: AsyncSession, config: Config, user: BotUser, *, force: bool = False
 ) -> list[BotSubscription]:
@@ -522,10 +547,11 @@ async def link_from_remnawave(
     Идемпотентна: повторно не импортирует уже привязанные ключи, а флаг
     remnawave_synced не даёт ходить в Remnawave на каждый /start.
     """
-    try:
-        await reconcile_deleted_clients(db, config, user)
-    except RemnawaveError as exc:
-        log.warning("Проверка удалённых ключей недоступна: %s", exc)
+    if force or _reconcile_due(user.id):
+        try:
+            await reconcile_deleted_clients(db, config, user)
+        except RemnawaveError as exc:
+            log.warning("Проверка удалённых ключей недоступна: %s", exc)
     if not force:
         if user.remnawave_synced and panel_type() != XUI:
             return []
@@ -609,6 +635,7 @@ async def create_subscription(
     *,
     source: str,
     amount_kopeks: int | None = None,
+    payment_id: int | None = None,
 ) -> BotSubscription:
     """Покупка тарифа как в исходном боте: КАЖДАЯ покупка заводит новый
     независимый ключ (свой аккаунт Remnawave), а не продлевает старый.
@@ -649,7 +676,7 @@ async def create_subscription(
         else:
             remote = await _create_or_adopt(
                 client,
-                username=_new_key_username(user.telegram_id),
+                username=_new_key_username(user.telegram_id, payment_id),
                 expire_at=expire_at,
                 internal_squad_uuids=plan.squad_uuids,
                 telegram_id=user.telegram_id,

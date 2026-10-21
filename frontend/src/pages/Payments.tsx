@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type Providers } from '@/lib/api'
 import { dateTime, number } from '@/lib/format'
@@ -213,10 +213,14 @@ function CryptoBotCard({ providers }: { providers: Providers }) {
 
 function StarsCard({ providers }: { providers: Providers }) {
   const queryClient = useQueryClient()
+  const [rate, setRate] = useState(String(providers.stars_rub_per_star))
+  useEffect(() => setRate(String(providers.stars_rub_per_star)), [providers.stars_rub_per_star])
   const save = useMutation({
-    mutationFn: (enabled: boolean) => panel.saveStars({ enabled }),
+    mutationFn: (json: { enabled: boolean; rub_per_star?: number }) => panel.saveStars(json),
     onSuccess: (data) => queryClient.setQueryData(['providers'], data),
   })
+  const rateValue = Number(rate.replace(',', '.'))
+  const rateValid = rateValue >= 0.1 && rateValue <= 100
 
   return (
     <Card>
@@ -224,7 +228,7 @@ function StarsCard({ providers }: { providers: Providers }) {
         <div>
           <h2 className="font-medium">Telegram Stars</h2>
           <p className="mt-1 text-sm text-muted">
-            Не требует настройки — курс к рублю приблизительный.
+            Не требует настройки. Официального курса к рублю нет — задайте свой ниже.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -232,11 +236,42 @@ function StarsCard({ providers }: { providers: Providers }) {
             type="checkbox"
             className="size-4"
             checked={providers.stars_enabled}
-            onChange={(e) => save.mutate(e.target.checked)}
+            onChange={(e) => save.mutate({ enabled: e.target.checked })}
           />
           Включено
         </label>
       </div>
+      <form
+        className="mt-4 flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save.mutate({ enabled: providers.stars_enabled, rub_per_star: rateValue })
+        }}
+      >
+        <Field
+          label="Курс: 1 звезда = ? ₽"
+          hint={
+            rateValid
+              ? `Тариф за 199 ₽ будет стоить ${Math.max(1, Math.round(199 / rateValue))} ⭐`
+              : 'От 0.1 до 100'
+          }
+        >
+          <Input
+            inputMode="decimal"
+            className="max-w-40"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+          />
+        </Field>
+        <Button
+          type="submit"
+          variant="ghost"
+          disabled={!rateValid || rateValue === providers.stars_rub_per_star || save.isPending}
+        >
+          Сохранить курс
+        </Button>
+      </form>
+      {save.isError && <p className="mt-2 text-sm text-danger">{(save.error as Error).message}</p>}
     </Card>
   )
 }
