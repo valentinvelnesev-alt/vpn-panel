@@ -396,7 +396,7 @@ class BotSettingsIn(BaseModel):
     )
     # keyboard — «Меню»/«Помощь» под полем ввода; commands — кнопка меню
     # Telegram слева от поля (не перекрывает жест «назад»).
-    menu_mode: Literal["keyboard", "commands"] = "keyboard"
+    menu_mode: Literal["keyboard", "commands"] = "commands"
 
     @field_validator(
         "support_url", "channel_url", "channel_id", "welcome_text",

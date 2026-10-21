@@ -270,7 +270,7 @@ class BotConfig(Base, TimestampMixin):
     # Где «Меню» и «Помощь»: "keyboard" — клавиатура под полем ввода,
     # "commands" — кнопка меню Telegram слева от поля (не мешает жесту
     # «назад» на телефоне).
-    menu_mode: Mapped[str] = mapped_column(String(16), default="keyboard", nullable=False)
+    menu_mode: Mapped[str] = mapped_column(String(16), default="commands", nullable=False)
 
 
 class PlanCategory(Base, TimestampMixin):

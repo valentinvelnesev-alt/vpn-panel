@@ -405,17 +405,26 @@ async def test_bottom_keyboard_sent_once_and_again_after_change(db) -> None:
 
     sent: list[object] = []
 
+    deleted: list[bool] = []
+
+    class Sent:
+        async def delete(self) -> None:
+            deleted.append(True)
+
     class FakeMessage:
         from_user = FROM
 
         async def answer(self, text, reply_markup=None, **kwargs):
             sent.append(reply_markup)
+            return Sent()
 
     config = make_config()
     await handlers._apply_bottom_keyboard(FakeMessage(), config)
     await handlers._apply_bottom_keyboard(FakeMessage(), config)
     # Клавиатура ставится один раз, а не на каждый /start.
     assert len(sent) == 1 and isinstance(sent[0], ReplyKeyboardMarkup)
+    # Служебное сообщение удалено сразу — в чате остаётся только меню.
+    assert deleted == [True]
 
     # Режим «кнопка меню слева» — прежнюю клавиатуру убираем, тоже один раз.
     commands = replace(config, menu_mode="commands")
