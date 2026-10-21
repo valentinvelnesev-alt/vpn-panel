@@ -155,6 +155,7 @@ class Config:
     referral_commission_enabled: bool = False
     referral_level1_percent: int = 25
     referral_level2_percent: int = 5
+    ad_links_enabled: bool = False
 
     purchase_notify_chat_id: int | None = None
     admin_telegram_ids: list[int] = field(default_factory=list)
@@ -351,6 +352,7 @@ async def load(db: AsyncSession) -> Config:
         referral_commission_enabled=row.referral_commission_enabled,
         referral_level1_percent=row.referral_level1_percent,
         referral_level2_percent=row.referral_level2_percent,
+        ad_links_enabled=row.ad_links_enabled,
         purchase_notify_chat_id=row.purchase_notify_chat_id,
         admin_telegram_ids=list(row.admin_telegram_ids or []),
         privacy_policy_url=row.privacy_policy_url,

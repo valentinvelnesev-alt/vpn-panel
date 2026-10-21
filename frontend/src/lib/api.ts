@@ -420,6 +420,35 @@ export interface AnalyticsOverview {
   top_plans: { title: string; purchases: number; revenue_rub: number }[]
 }
 
+export interface AdLink {
+  id: number
+  name: string
+  prefix: string
+  percent: number
+  owner: string
+  owner_found: boolean
+  is_active: boolean
+  url: string | null
+  users: number
+  buyers: number
+  turnover_rub: number
+  earned_rub: number
+  pending_rub: number
+}
+
+export interface AdLinksState {
+  enabled: boolean
+  links: AdLink[]
+}
+
+export interface AdLinkInput {
+  name: string
+  prefix: string
+  percent: number
+  owner: string
+  is_active: boolean
+}
+
 export interface BotProxy {
   host: string
   port: number
@@ -483,6 +512,15 @@ export const panel = {
   setBotProxy: (proxy: BotProxy) =>
     api<BotStatus>('/bot/proxy', { method: 'PUT', json: proxy }),
   deleteBotProxy: () => api<BotStatus>('/bot/proxy', { method: 'DELETE' }),
+  adLinks: () => api<AdLinksState>('/bot/ad-links'),
+  setAdLinksEnabled: (enabled: boolean) =>
+    api<AdLinksState>('/bot/ad-links/settings', { method: 'PUT', json: { enabled } }),
+  createAdLink: (json: AdLinkInput) =>
+    api<AdLinksState>('/bot/ad-links', { method: 'POST', json }),
+  updateAdLink: (id: number, json: AdLinkInput) =>
+    api<AdLinksState>(`/bot/ad-links/${id}`, { method: 'PUT', json }),
+  deleteAdLink: (id: number) =>
+    api<AdLinksState>(`/bot/ad-links/${id}`, { method: 'DELETE' }),
   startBot: () => api<BotStatus>('/bot/start', { method: 'POST' }),
   stopBot: () => api<BotStatus>('/bot/stop', { method: 'POST' }),
   setMenuPhoto: (file: File) => {

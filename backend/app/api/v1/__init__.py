@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    ad_links,
     analytics,
     auth,
     backups,
@@ -29,6 +30,7 @@ api_router.include_router(dashboard.router)
 api_router.include_router(nodes.router)
 api_router.include_router(users.router)
 api_router.include_router(bot.router)
+api_router.include_router(ad_links.router)
 api_router.include_router(clients.router)
 api_router.include_router(migration.router)
 api_router.include_router(payments.router)

@@ -116,6 +116,7 @@ def main_menu(
     trial_available: bool,
     has_subscription: bool,
     balance_kopeks: int,
+    has_ad_stats: bool = False,
 ) -> InlineKeyboardMarkup:
     """Порядок как в исходном боте: покупка, подписки, подключение,
     кабинет, баланс, рефералка, промокод, канал и поддержка. Сколько
@@ -161,13 +162,23 @@ def main_menu(
     buttons = [
         _btn(config, text, style=menu_style(config, key), **params) for key, text, params in items
     ]
+    # «Статистика» — только владельцам рекламных ссылок, отдельной строкой внизу.
+    stats_row = (
+        [_btn(config, "Статистика", callback_data="ad_stats", style=menu_style(config, "ad_stats"))]
+        if has_ad_stats
+        else None
+    )
     if config.menu_columns == 1:
         # Канал и поддержка — короткие, рядом друг с другом, как раньше.
         tail = [b for (key, _, _), b in zip(items, buttons, strict=True) if key in ("channel", "support")]
         head = [b for (key, _, _), b in zip(items, buttons, strict=True) if key not in ("channel", "support")]
-        return _markup([[b] for b in head] + [tail])
-    step = config.menu_columns
-    return _markup([buttons[i : i + step] for i in range(0, len(buttons), step)])
+        rows = [[b] for b in head] + [tail]
+    else:
+        step = config.menu_columns
+        rows = [buttons[i : i + step] for i in range(0, len(buttons), step)]
+    if stats_row:
+        rows.append(stats_row)
+    return _markup(rows)
 
 
 def back_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:

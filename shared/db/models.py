@@ -178,6 +178,12 @@ class BotConfig(Base, TimestampMixin):
     )
     trial_hwid_limit: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
 
+    # Рекламные ссылки с процентом от покупок — выключены, пока админ не
+    # включит их в панели (Бот → внизу страницы).
+    ad_links_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     referral_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
@@ -399,6 +405,10 @@ class BotUser(Base, TimestampMixin):
     )
     referral_reward_paid: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
+    )
+    # Рекламная ссылка, по которой пришёл пользователь (первое касание).
+    ad_link_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_ad_links.id", ondelete="SET NULL"), default=None, index=True
     )
 
     # Персональная скидка на следующую оплату тарифа (из промокода).
@@ -698,6 +708,50 @@ class ReferralReward(Base):
         ForeignKey("bot_users.id", ondelete="CASCADE"), nullable=False
     )
     days: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class AdLink(Base):
+    """Рекламная ссылка t.me/bot?start=<prefix>: владелец получает процент
+    с каждой оплаты тарифа привлечённых пользователей и видит статистику
+    в боте. Владелец — по Telegram ID или @username (username превращается в
+    ID, когда человек появится в боте)."""
+
+    __tablename__ = "bot_ad_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    percent: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    owner_telegram_id: Mapped[int | None] = mapped_column(
+        BigInteger, default=None, index=True
+    )
+    owner_username: Mapped[str | None] = mapped_column(String(64), default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class AdEarning(Base):
+    """Одна оплата привлечённого пользователя и положенная владельцу доля.
+    `paid` — доля уже зачислена на баланс владельца (если он ещё не нашёлся
+    в боте, копится и зачисляется позже)."""
+
+    __tablename__ = "bot_ad_earnings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ad_link_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_ad_links.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    buyer_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_users.id", ondelete="SET NULL"), default=None
+    )
+    amount_kopeks: Mapped[int] = mapped_column(Integer, nullable=False)
+    commission_kopeks: Mapped[int] = mapped_column(Integer, nullable=False)
+    paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

@@ -6,6 +6,7 @@ import { panel, type BotSettings, type BotStatus, type ButtonStyle } from '@/lib
 import BotPlans from './BotPlans'
 import BotTraffic from './BotTraffic'
 import BotPromo from './BotPromo'
+import BotAdLinks from './BotAdLinks'
 import BotReferral from './BotReferral'
 import { usePanelTerms } from '@/lib/panelKind'
 
@@ -853,6 +854,7 @@ export default function Bot() {
           <BotPromo />
           <BotReferral />
           <SettingsCard status={status} />
+          <BotAdLinks />
         </>
       )}
     </div>

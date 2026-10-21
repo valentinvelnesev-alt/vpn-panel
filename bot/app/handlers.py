@@ -5,6 +5,7 @@ keyboards.py, выдача подписок в services/subscriptions.py, при
 оплат — в services/payment_processor.py.
 """
 
+import html
 import json
 import logging
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ from app.icons import ICONS_OFF
 from app.services import (
     payment_check,
     payment_flow,
+    adlinks,
     payment_processor,
     pricing,
     referral,
@@ -279,6 +281,9 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         titles = await _plan_titles(db, rows)
         wallet_row = await wallet.get_or_create(db, user)
         balance = wallet_row.balance_kopeks
+        has_ad_stats = bool(
+            await adlinks.owner_links(db, config, telegram_id, target.from_user.username)
+        )
         current = _current_subscription(rows)
         plan_title = titles.get(current.id) if current else None
         text = _menu_text(
@@ -293,6 +298,7 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         trial_available=trial_available,
         has_subscription=bool(rows),
         balance_kopeks=balance,
+        has_ad_stats=has_ad_stats,
     )
 
     if isinstance(target, CallbackQuery):
@@ -332,6 +338,14 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
                 db, message.from_user.id, username=message.from_user.username
             )
             await referral.attach_referrer(db, config, user, code)
+
+    # Рекламная ссылка: t.me/bot?start=<префикс>, префикс задаёт админ.
+    elif payload and config.ad_links_enabled:
+        async with session() as db:
+            user = await subs.get_or_create_user(
+                db, message.from_user.id, username=message.from_user.username
+            )
+            await adlinks.attach(db, config, user, payload)
 
     if not await _channel_ok(bot, config, message.from_user.id):
         await message.answer(
@@ -1256,6 +1270,34 @@ async def cb_referral(callback: CallbackQuery, config: Config, bot: Bot) -> None
     lines += ["", "Ваша ссылка:", "<code>{link}</code>", "", "Приглашено: {invited}"]
     text = t(config, "\n".join(lines), link=link, invited=invited or 0)
     await screen(callback.message, config, text, keyboards.referral_menu(config, link))
+    await callback.answer()
+
+
+# ── Статистика рекламных ссылок ───────────────────────────────────────
+@router.callback_query(F.data == "ad_stats")
+async def cb_ad_stats(callback: CallbackQuery, config: Config, bot: Bot) -> None:
+    async with session() as db:
+        links = await adlinks.owner_links(
+            db, config, callback.from_user.id, callback.from_user.username
+        )
+        rows = await adlinks.stats(db, links)
+    if not rows:
+        await callback.answer("Статистика недоступна", show_alert=True)
+        return
+
+    me = await bot.get_me()
+    lines = ["{@star} <b>Статистика</b>"]
+    for row in rows:
+        lines += [
+            "",
+            f"<b>{html.escape(row.link.name)}</b> · {row.link.percent}% с покупок",
+            f"<code>https://t.me/{me.username}?start={row.link.prefix}</code>",
+            f"Перешло: {row.users}",
+            f"Купили: {row.buyers} ({row.purchases} оплат)",
+            f"Сумма покупок: {row.turnover_kopeks / 100:.2f} ₽",
+            f"Ваш доход: {row.earned_kopeks / 100:.2f} ₽ (зачислен на баланс)",
+        ]
+    await screen(callback.message, config, t(config, "\n".join(lines)), keyboards.back_to_menu(config))
     await callback.answer()
 
 

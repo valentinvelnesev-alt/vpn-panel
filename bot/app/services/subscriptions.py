@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config, PlanView, TrafficPackageView
-from app.services import referral
+from app.services import adlinks, referral
 from app.services.notify import send_sales as notify_sales
 from shared.db.models import BotSubscription, BotUser, Purchase
 from shared.panel import XUI, PanelClient, make_client, panel_name, panel_type
@@ -866,6 +866,7 @@ async def after_paid_purchase(
     решает, как и когда доставить эти уведомления (сразу или пачкой).
     """
     awarded = await referral.award_commission(db, config, user, amount_kopeks)
+    awarded += await adlinks.credit_commission(db, config, user, amount_kopeks)
 
     if config.purchase_notify_chat_id and config.token:
         text = sale_text(

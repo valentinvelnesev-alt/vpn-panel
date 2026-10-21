@@ -250,3 +250,38 @@ def test_proxy_not_saved_when_telegram_unreachable(client: TestClient, monkeypat
     resp = client.put("/api/v1/bot/proxy", json={"host": "10.0.0.1", "port": 1080})
     assert resp.status_code == 422
     assert client.get("/api/v1/bot").json()["proxy_masked"] is None
+
+
+def test_ad_links_off_by_default_and_crud(client: TestClient) -> None:
+    body = client.get("/api/v1/bot/ad-links").json()
+    assert body["enabled"] is False and body["links"] == []
+
+    assert client.put("/api/v1/bot/ad-links/settings", json={"enabled": True}).json()["enabled"]
+
+    created = client.post(
+        "/api/v1/bot/ad-links",
+        json={"name": "YouTube", "prefix": "YT_1", "percent": 50, "owner": "@Adman"},
+    )
+    assert created.status_code == 201
+    link = created.json()["links"][0]
+    assert link["prefix"] == "yt_1" and link["owner"] == "@Adman" and not link["owner_found"]
+
+    dup = client.post(
+        "/api/v1/bot/ad-links",
+        json={"name": "x", "prefix": "yt_1", "percent": 10, "owner": "123456"},
+    )
+    assert dup.status_code == 409
+    for bad in ("ref_x", "a b", "x"):
+        resp = client.post(
+            "/api/v1/bot/ad-links",
+            json={"name": "x", "prefix": bad, "percent": 10, "owner": "123456"},
+        )
+        assert resp.status_code in (422, 409), bad
+
+    updated = client.put(
+        f"/api/v1/bot/ad-links/{link['id']}",
+        json={"name": "YT", "prefix": "yt_1", "percent": 40, "owner": "555"},
+    ).json()["links"][0]
+    assert updated["percent"] == 40 and updated["owner"] == "555" and updated["owner_found"]
+
+    assert client.delete(f"/api/v1/bot/ad-links/{link['id']}").json()["links"] == []
