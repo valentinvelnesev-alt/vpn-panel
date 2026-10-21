@@ -241,20 +241,28 @@ function Navigation() {
   const navRef = useRef<HTMLElement>(null)
 
   // На невысоком экране открытый раздел мог оказаться под нижним краем
-  // меню — прокручиваем к нему, когда раскрылся подпункт.
+  // меню — докручиваем к нему само меню и только если он за краем.
+  // scrollIntoView тут не годится: он двигал и всю страницу, и меню
+  // дёргалось при каждом переходе.
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      navRef.current
-        ?.querySelector('[aria-current="page"]')
-        ?.scrollIntoView({ block: 'center' })
-    }, 450)
+      const nav = navRef.current
+      const item = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+      if (!nav || !item) return
+      const top = item.offsetTop // nav — ближайший позиционированный предок
+      const bottom = top + item.offsetHeight
+      if (top < nav.scrollTop) nav.scrollTop = top - 8
+      else if (bottom > nav.scrollTop + nav.clientHeight) {
+        nav.scrollTop = bottom - nav.clientHeight + 8
+      }
+    }, 350)
     return () => window.clearTimeout(timer)
   }, [pathname])
 
   return (
     <div className="flex h-full flex-col">
       <Brand />
-      <nav ref={navRef} className="mt-1 flex-1 space-y-3 overflow-y-auto pr-1">
+      <nav ref={navRef} className="no-scrollbar relative mt-1 flex-1 space-y-3 overflow-y-auto">
         {groups.map((group, index) => (
           <div
             key={group.title}

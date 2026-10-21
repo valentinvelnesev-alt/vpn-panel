@@ -34,6 +34,13 @@ html.light {
     border-color: var(--color-border);
   }
 
+  /* Место под полосу прокрутки страницы всегда зарезервировано: иначе на
+     коротких страницах её нет, на длинных есть, и всё содержимое прыгает
+     вбок при переходе между разделами. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
   body {
     background: var(--color-bg);
     color: var(--color-fg);
@@ -49,6 +56,14 @@ html.light {
 }
 
 @layer components {
+  /* Прокрутка без видимой полосы — для бокового меню. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Полупрозрачные поверхности: сквозь них видно живой фон, но текст
      остаётся читаемым за счёт размытия. */
   .glass {
