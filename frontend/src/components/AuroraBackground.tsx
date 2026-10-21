@@ -186,6 +186,9 @@ function Particles({ accent: accentKey }: { accent: string | null }) {
  */
 export default function AuroraBackground() {
   const { accent, background } = useBrand()
+  useEffect(() => {
+    document.documentElement.classList.toggle('custom-bg', !!background)
+  }, [background])
   if (background) {
     return (
       <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
@@ -193,7 +196,7 @@ export default function AuroraBackground() {
           className="absolute inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url("${background}")` }}
         />
-        <div className="absolute inset-0 bg-bg/75" />
+        <div className="absolute inset-0 bg-bg/85" />
       </div>
     )
   }
