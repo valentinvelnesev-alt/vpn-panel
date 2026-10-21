@@ -38,7 +38,7 @@ export function SaveBar({
   savedAt,
   onSave,
   onReset,
-  savedNote = 'Сохранено — бот уже работает с новыми настройками, перезапускать не нужно',
+  savedNote = 'Сохранено — бот применяет изменения сам, перезапускать его не нужно',
 }: {
   dirty: boolean
   pending: boolean
@@ -64,11 +64,12 @@ export function SaveBar({
     <>
       <div
         className={cn(
-          'fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 transition-all duration-300',
+          // На компьютере — по центру рабочей области, а не поверх меню слева.
+          'fixed inset-x-0 bottom-4 z-30 flex justify-center px-4 transition-all duration-300 lg:pl-[19.5rem]',
           visible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-6 opacity-0',
         )}
       >
-        <div className="glass flex w-full max-w-2xl flex-wrap items-center gap-3 rounded-3xl px-4 py-3 shadow-2xl shadow-black/30">
+        <div className="flex w-full max-w-2xl flex-wrap items-center gap-3 rounded-3xl border border-accent/30 bg-surface px-4 py-3 shadow-2xl shadow-black/50">
           {dirty || pending || error ? (
             <>
               <span className="flex-1 text-sm">

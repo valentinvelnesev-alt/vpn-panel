@@ -12,7 +12,7 @@ import { cn } from '@/lib/cn'
 // она в главном меню (остальные живут на других экранах).
 const MENU_BUTTONS: [string, string, boolean, boolean][] = [
   ['trial', 'Попробовать бесплатно', true, true],
-  ['buy', 'Купить / Продлить подписку', false, true],
+  ['buy', 'Купить / Продлить', false, true],
   ['buy_more', 'Купить ещё одну', false, true],
   ['subscriptions', 'Подписка', true, true],
   ['connect', 'Подключиться', true, true],
@@ -248,7 +248,7 @@ function MenuEditor({ status }: { status: BotStatus }) {
                       PREVIEW_STYLE[styleOf(key)],
                     )}
                   >
-                    {label.replace(' / Продлить подписку', '')}
+                    {label.replace(' / Продлить', '')}
                   </span>
                 ))}
               </div>

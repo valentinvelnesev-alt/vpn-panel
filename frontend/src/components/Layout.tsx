@@ -27,7 +27,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { auth } from '@/lib/api'
 import { useBotStatus } from '@/lib/botSettings'
@@ -132,7 +132,7 @@ const guard = (event: MouseEvent) => {
 const itemClass = (active: boolean, nested = false) =>
   cn(
     'group flex w-full items-center gap-3 rounded-2xl border text-sm transition-all duration-200',
-    nested ? 'px-3 py-2' : 'px-3 py-2.5',
+    nested ? 'px-3 py-1.5' : 'px-3 py-2',
     active
       ? 'border-accent/50 bg-accent/12 font-medium text-accent shadow-sm shadow-accent/10'
       : 'border-transparent text-muted hover:bg-surface-hover hover:text-fg',
@@ -237,15 +237,28 @@ function useLogout() {
 function Navigation() {
   const groups = useNav()
   const logout = useLogout()
+  const { pathname } = useLocation()
+  const navRef = useRef<HTMLElement>(null)
+
+  // На невысоком экране открытый раздел мог оказаться под нижним краем
+  // меню — прокручиваем к нему, когда раскрылся подпункт.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      navRef.current
+        ?.querySelector('[aria-current="page"]')
+        ?.scrollIntoView({ block: 'center' })
+    }, 450)
+    return () => window.clearTimeout(timer)
+  }, [pathname])
 
   return (
     <div className="flex h-full flex-col">
       <Brand />
-      <nav className="mt-2 flex-1 space-y-4 overflow-y-auto pr-1">
+      <nav ref={navRef} className="mt-1 flex-1 space-y-3 overflow-y-auto pr-1">
         {groups.map((group, index) => (
           <div
             key={group.title}
-            className={cn(index > 0 && 'border-t border-dashed border-border/70 pt-4')}
+            className={cn(index > 0 && 'border-t border-dashed border-border/70 pt-3')}
           >
             <p className="mb-1.5 flex items-center gap-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
               <span className="h-3 w-0.5 rounded-full bg-accent" aria-hidden />
