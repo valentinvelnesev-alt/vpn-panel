@@ -434,6 +434,9 @@ export interface AdLink {
   turnover_rub: number
   earned_rub: number
   pending_rub: number
+  payout_mode: 'balance' | 'manual'
+  paid_out_rub: number
+  owed_rub: number
 }
 
 export interface AdLinksState {
@@ -447,6 +450,7 @@ export interface AdLinkInput {
   percent: number
   owner: string
   is_active: boolean
+  payout_mode: 'balance' | 'manual'
 }
 
 export interface BotProxy {
@@ -519,6 +523,8 @@ export const panel = {
     api<AdLinksState>('/bot/ad-links', { method: 'POST', json }),
   updateAdLink: (id: number, json: AdLinkInput) =>
     api<AdLinksState>(`/bot/ad-links/${id}`, { method: 'PUT', json }),
+  payoutAdLink: (id: number) =>
+    api<AdLinksState>(`/bot/ad-links/${id}/payout`, { method: 'POST' }),
   deleteAdLink: (id: number) =>
     api<AdLinksState>(`/bot/ad-links/${id}`, { method: 'DELETE' }),
   startBot: () => api<BotStatus>('/bot/start', { method: 'POST' }),

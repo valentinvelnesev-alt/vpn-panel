@@ -1295,8 +1295,12 @@ async def cb_ad_stats(callback: CallbackQuery, config: Config, bot: Bot) -> None
             f"Перешло: {row.users}",
             f"Купили: {row.buyers} ({row.purchases} оплат)",
             f"Сумма покупок: {row.turnover_kopeks / 100:.2f} ₽",
-            f"Ваш доход: {row.earned_kopeks / 100:.2f} ₽ (зачислен на баланс)",
+            f"Заработано: {row.earned_kopeks / 100:.2f} ₽"
+            + (" (зачислено на баланс)" if row.link.payout_mode == "balance" else ""),
         ]
+        if row.link.paid_out_kopeks:
+            lines.append(f"Выплачено: {row.link.paid_out_kopeks / 100:.2f} ₽")
+        lines.append(f"К выплате: {row.owed_kopeks / 100:.2f} ₽")
     await screen(callback.message, config, t(config, "\n".join(lines)), keyboards.back_to_menu(config))
     await callback.answer()
 

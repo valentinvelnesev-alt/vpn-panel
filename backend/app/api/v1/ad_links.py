@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -7,7 +8,16 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentAdmin, DbSession
 from shared import bus
-from shared.db.models import AdEarning, AdLink, AuditLog, BotConfig, BotUser
+from shared.db.models import (
+    AdEarning,
+    AdLink,
+    AuditLog,
+    BotConfig,
+    BotUser,
+    Wallet,
+    WalletTransaction,
+    WalletTxType,
+)
 
 router = APIRouter(prefix="/bot/ad-links", tags=["ad-links"])
 
@@ -22,6 +32,8 @@ class AdLinkIn(BaseModel):
     # Telegram ID (цифры) или @username владельца ссылки.
     owner: str = Field(min_length=1, max_length=64)
     is_active: bool = True
+    # balance — доля сразу на баланс в боте; manual — только учёт, платит админ.
+    payout_mode: Literal["balance", "manual"] = "balance"
 
 
 class AdLinkOut(BaseModel):
@@ -38,6 +50,9 @@ class AdLinkOut(BaseModel):
     turnover_rub: float
     earned_rub: float
     pending_rub: float
+    payout_mode: str
+    paid_out_rub: float
+    owed_rub: float
 
 
 class AdLinksOut(BaseModel):
@@ -145,6 +160,9 @@ async def _out(db: DbSession, link: AdLink, bot_username: str | None) -> AdLinkO
         turnover_rub=turnover / 100,
         earned_rub=earned / 100,
         pending_rub=(pending or 0) / 100,
+        payout_mode=link.payout_mode,
+        paid_out_rub=link.paid_out_kopeks / 100,
+        owed_rub=max(earned - link.paid_out_kopeks, 0) / 100,
     )
 
 
@@ -187,6 +205,7 @@ async def _save(db: DbSession, link: AdLink, data: AdLinkIn) -> None:
     link.percent = data.percent
     link.owner_telegram_id, link.owner_username = _parse_owner(data.owner)
     link.is_active = data.is_active
+    link.payout_mode = data.payout_mode
     await _resolve_owner(db, link)
 
 
@@ -212,6 +231,56 @@ async def update_link(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ссылка не найдена")
     await _save(db, link, data)
     _audit(db, admin, "ad_links.update", request, prefix=link.prefix)
+    await db.flush()
+    await db.commit()
+    return await _listing(db)
+
+
+@router.post("/{link_id}/payout", response_model=AdLinksOut)
+async def payout(
+    link_id: int, admin: CurrentAdmin, db: DbSession, request: Request
+) -> AdLinksOut:
+    """«Выплатил»: обнуляет сумму к выплате. В режиме «на баланс» ту же
+    сумму (но не больше остатка) списывает с баланса владельца в боте —
+    иначе он получил бы деньги дважды."""
+    link = await db.get(AdLink, link_id)
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Ссылка не найдена")
+    earned = await db.scalar(
+        select(func.coalesce(func.sum(AdEarning.commission_kopeks), 0)).where(
+            AdEarning.ad_link_id == link.id
+        )
+    )
+    owed = max((earned or 0) - link.paid_out_kopeks, 0)
+    if owed <= 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, "К выплате ничего нет")
+
+    debited = 0
+    if link.payout_mode == "balance" and link.owner_telegram_id is not None:
+        wallet = await db.scalar(
+            select(Wallet)
+            .join(BotUser, BotUser.id == Wallet.user_id)
+            .where(BotUser.telegram_id == link.owner_telegram_id)
+            .with_for_update()
+        )
+        if wallet is not None:
+            debited = min(wallet.balance_kopeks, owed)
+            if debited > 0:
+                wallet.balance_kopeks -= debited
+                db.add(
+                    WalletTransaction(
+                        wallet_id=wallet.id,
+                        amount_kopeks=-debited,
+                        type=WalletTxType.ADMIN_ADJUST,
+                        description=f"Выплата по рекламной ссылке «{link.name}»",
+                    )
+                )
+
+    link.paid_out_kopeks += owed
+    _audit(
+        db, admin, "ad_links.payout", request,
+        prefix=link.prefix, amount_kopeks=owed, debited_kopeks=debited,
+    )
     await db.flush()
     await db.commit()
     return await _listing(db)

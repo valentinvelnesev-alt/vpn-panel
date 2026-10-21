@@ -61,7 +61,7 @@ async def _settle(db: AsyncSession, link: AdLink, owner: BotUser) -> int:
         )
     )
     total = sum(e.commission_kopeks for e in pending)
-    if total > 0:
+    if total > 0 and link.payout_mode == "balance":
         await wallet.credit(
             db,
             owner,
@@ -103,7 +103,8 @@ async def credit_commission(
     if owner is None:
         return []
     await _settle(db, link, owner)
-    return [(owner, share)]
+    # В ручном режиме на баланс ничего не идёт — владельца не уведомляем.
+    return [(owner, share)] if link.payout_mode == "balance" else []
 
 
 async def owner_links(
@@ -142,6 +143,11 @@ class LinkStats:
     purchases: int
     turnover_kopeks: int
     earned_kopeks: int
+
+    @property
+    def owed_kopeks(self) -> int:
+        """Заработано, но не выплачено админом (обнуляется кнопкой в панели)."""
+        return max(self.earned_kopeks - self.link.paid_out_kopeks, 0)
 
 
 async def stats(db: AsyncSession, links: list[AdLink]) -> list[LinkStats]:

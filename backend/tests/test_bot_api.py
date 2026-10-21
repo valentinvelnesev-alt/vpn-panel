@@ -285,3 +285,31 @@ def test_ad_links_off_by_default_and_crud(client: TestClient) -> None:
     assert updated["percent"] == 40 and updated["owner"] == "555" and updated["owner_found"]
 
     assert client.delete(f"/api/v1/bot/ad-links/{link['id']}").json()["links"] == []
+
+
+async def test_ad_link_payout_resets_owed(client: TestClient) -> None:
+    from datetime import UTC, datetime
+
+    from shared.db.models import AdEarning, BotUser, Wallet
+
+    client.put("/api/v1/bot/ad-links/settings", json={"enabled": True})
+    body = {"name": "A", "prefix": "aa", "percent": 50, "owner": "42", "payout_mode": "balance"}
+    link = client.post("/api/v1/bot/ad-links", json=body).json()["links"][0]
+
+    async with SessionLocal() as db:
+        owner = BotUser(telegram_id=42)
+        db.add(owner)
+        await db.flush()
+        db.add(Wallet(user_id=owner.id, balance_kopeks=7000))
+        db.add(AdEarning(ad_link_id=link["id"], amount_kopeks=20000, commission_kopeks=10000,
+                         paid=True, created_at=datetime.now(UTC)))
+        await db.commit()
+
+    assert client.post(f"/api/v1/bot/ad-links/{link['id']}/payout").status_code == 200
+    after = client.get("/api/v1/bot/ad-links").json()["links"][0]
+    assert after["owed_rub"] == 0 and after["paid_out_rub"] == 100.0
+    assert client.post(f"/api/v1/bot/ad-links/{link['id']}/payout").status_code == 409
+
+    async with SessionLocal() as db:
+        wallet = await db.scalar(__import__("sqlalchemy").select(Wallet))
+        assert wallet.balance_kopeks == 0  # списано только то, что было на балансе

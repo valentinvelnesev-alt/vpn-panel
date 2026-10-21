@@ -137,3 +137,18 @@ async def test_inactive_link_pays_nothing(db) -> None:
     await db.flush()
     assert await adlinks.credit_commission(db, make_config(), buyer, 10000) == []
     assert AdEarning  # модель импортируется
+
+
+async def test_manual_mode_does_not_touch_balance(db) -> None:
+    link = await make_link(db, owner_telegram_id=10, payout_mode="manual")
+    owner = await subs.get_or_create_user(db, 10)
+    buyer = await subs.get_or_create_user(db, 1)
+    buyer.ad_link_id = link.id
+    await db.flush()
+
+    assert await adlinks.credit_commission(db, make_config(), buyer, 20000) == []
+    assert (await wallet.get_or_create(db, owner)).balance_kopeks == 0
+    [row] = await adlinks.stats(db, [link])
+    assert row.owed_kopeks == 10000
+    link.paid_out_kopeks = 10000
+    assert row.owed_kopeks == 0

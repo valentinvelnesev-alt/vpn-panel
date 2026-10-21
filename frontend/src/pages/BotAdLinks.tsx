@@ -5,7 +5,7 @@ import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type AdLink, type AdLinkInput, type AdLinksState } from '@/lib/api'
 import { number } from '@/lib/format'
 
-const EMPTY: AdLinkInput = { name: '', prefix: '', percent: 50, owner: '', is_active: true }
+const EMPTY: AdLinkInput = { name: '', prefix: '', percent: 50, owner: '', is_active: true, payout_mode: 'balance' }
 
 const rub = (value: number) => `${number(Math.round(value * 100) / 100)} ₽`
 
@@ -32,6 +32,10 @@ export default function BotAdLinks() {
       reset()
     },
   })
+  const payout = useMutation({
+    mutationFn: (id: number) => panel.payoutAdLink(id),
+    onSuccess: refresh,
+  })
   const remove = useMutation({
     mutationFn: (id: number) => panel.deleteAdLink(id),
     onSuccess: refresh,
@@ -50,6 +54,7 @@ export default function BotAdLinks() {
       percent: link.percent,
       owner: link.owner,
       is_active: link.is_active,
+      payout_mode: link.payout_mode,
     })
   }
 
@@ -115,6 +120,23 @@ export default function BotAdLinks() {
                 />
               </Field>
             </div>
+            <Field
+              label="Выплата владельцу"
+              hint={
+                form.payout_mode === 'balance'
+                  ? 'Доля сразу падает на баланс владельца в боте. «Выплатил» списывает её обратно.'
+                  : 'На баланс ничего не идёт: сумма только копится в статистике, вы платите сами и нажимаете «Выплатил».'
+              }
+            >
+              <select
+                className="w-full rounded-2xl border bg-bg px-3 py-2 text-sm"
+                value={form.payout_mode}
+                onChange={(e) => set('payout_mode', e.target.value as AdLinkInput['payout_mode'])}
+              >
+                <option value="balance">На баланс в боте</option>
+                <option value="manual">Только показывать (плачу сам)</option>
+              </select>
+            </Field>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -201,13 +223,34 @@ export default function BotAdLinks() {
                       <dd className="tabular-nums">{rub(link.turnover_rub)}</dd>
                     </div>
                     <div>
-                      <dt className="text-muted">Доход владельца</dt>
+                      <dt className="text-muted">Заработано</dt>
                       <dd className="tabular-nums">
                         {rub(link.earned_rub)}
                         {link.pending_rub > 0 && ` (ждёт ${rub(link.pending_rub)})`}
                       </dd>
                     </div>
                   </dl>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-bg px-3 py-2 text-xs">
+                    <span>
+                      {link.payout_mode === 'balance' ? 'На баланс' : 'Ручная выплата'} · выплачено{' '}
+                      {rub(link.paid_out_rub)} · <b>к выплате {rub(link.owed_rub)}</b>
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={link.owed_rub <= 0 || payout.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Отметить выплаченным ${rub(link.owed_rub)} для ${link.owner}? Сумма к выплате обнулится.`,
+                          )
+                        )
+                          payout.mutate(link.id)
+                      }}
+                    >
+                      Выплатил
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>

@@ -730,6 +730,15 @@ class AdLink(Base):
     )
     owner_username: Mapped[str | None] = mapped_column(String(64), default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # "balance" — доля сразу идёт на баланс владельца в боте; "manual" —
+    # только копится в статистике, админ платит сам и обнуляет «к выплате».
+    payout_mode: Mapped[str] = mapped_column(
+        String(16), default="balance", server_default="balance", nullable=False
+    )
+    # Сколько уже выплачено владельцу (обнуления админом), в копейках.
+    paid_out_kopeks: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
