@@ -400,6 +400,10 @@ class BotUser(Base, TimestampMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # Какая клавиатура под полем ввода уже стоит у клиента (см.
+    # keyboards.keyboard_state). Совпадает с нужной — отдельное сообщение
+    # с клавиатурой на /start не шлём.
+    keyboard_state: Mapped[str | None] = mapped_column(String(32), default=None)
 
     # Свой код для реферальной ссылки — стабилен даже после смены бота.
     referral_code: Mapped[str | None] = mapped_column(

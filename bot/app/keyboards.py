@@ -55,6 +55,14 @@ def bottom_keyboard(config: Config) -> ReplyKeyboardMarkup | ReplyKeyboardRemove
     return reply_menu(config)
 
 
+def keyboard_state(config: Config) -> str:
+    """Подпись клавиатуры под полем ввода: меняется, только когда в панели
+    поменяли режим или спрятали «Помощь» — тогда клиенту нужна новая."""
+    if config.menu_mode == "commands":
+        return "none"
+    return "menu+help" if config.shows("help") else "menu"
+
+
 def reply_menu(config: Config | None = None) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода: «Меню» и «Помощь».
 

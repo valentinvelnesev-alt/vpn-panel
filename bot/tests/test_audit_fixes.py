@@ -398,20 +398,42 @@ def test_cispay_webhook_signature() -> None:
     assert CisPayClient.is_paid({"status": "PAID"}) and not CisPayClient.is_paid({"status": "PENDING"})
 
 
-async def test_bottom_keyboard_message_is_removed_right_away() -> None:
-    from aiogram.types import ReplyKeyboardMarkup
+async def test_bottom_keyboard_sent_once_and_again_after_change(db) -> None:
+    from dataclasses import replace
 
-    events: list[str] = []
+    from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
-    class Sent:
-        async def delete(self) -> None:
-            events.append("deleted")
+    sent: list[object] = []
 
     class FakeMessage:
-        async def answer(self, text, reply_markup=None, **kwargs):
-            events.append("sent" if isinstance(reply_markup, ReplyKeyboardMarkup) else "?")
-            return Sent()
+        from_user = FROM
 
-    await handlers._apply_bottom_keyboard(FakeMessage(), make_config())
-    # Клавиатура доставлена, а служебное сообщение не висит над меню.
-    assert events == ["sent", "deleted"]
+        async def answer(self, text, reply_markup=None, **kwargs):
+            sent.append(reply_markup)
+
+    config = make_config()
+    await handlers._apply_bottom_keyboard(FakeMessage(), config)
+    await handlers._apply_bottom_keyboard(FakeMessage(), config)
+    # Клавиатура ставится один раз, а не на каждый /start.
+    assert len(sent) == 1 and isinstance(sent[0], ReplyKeyboardMarkup)
+
+    # Режим «кнопка меню слева» — прежнюю клавиатуру убираем, тоже один раз.
+    commands = replace(config, menu_mode="commands")
+    await handlers._apply_bottom_keyboard(FakeMessage(), commands)
+    await handlers._apply_bottom_keyboard(FakeMessage(), commands)
+    assert len(sent) == 2 and isinstance(sent[1], ReplyKeyboardRemove)
+
+
+async def test_no_keyboard_message_for_new_user_in_commands_mode(db) -> None:
+    from dataclasses import replace
+
+    sent: list[object] = []
+
+    class FakeMessage:
+        from_user = FROM
+
+        async def answer(self, text, reply_markup=None, **kwargs):
+            sent.append(reply_markup)
+
+    await handlers._apply_bottom_keyboard(FakeMessage(), replace(make_config(), menu_mode="commands"))
+    assert sent == []
