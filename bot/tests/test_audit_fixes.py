@@ -396,3 +396,22 @@ def test_cispay_webhook_signature() -> None:
     assert not verify_signature("key", body, "0" * 64)
     assert not verify_signature("key", body + b" ", good)
     assert CisPayClient.is_paid({"status": "PAID"}) and not CisPayClient.is_paid({"status": "PENDING"})
+
+
+async def test_bottom_keyboard_message_is_removed_right_away() -> None:
+    from aiogram.types import ReplyKeyboardMarkup
+
+    events: list[str] = []
+
+    class Sent:
+        async def delete(self) -> None:
+            events.append("deleted")
+
+    class FakeMessage:
+        async def answer(self, text, reply_markup=None, **kwargs):
+            events.append("sent" if isinstance(reply_markup, ReplyKeyboardMarkup) else "?")
+            return Sent()
+
+    await handlers._apply_bottom_keyboard(FakeMessage(), make_config())
+    # Клавиатура доставлена, а служебное сообщение не висит над меню.
+    assert events == ["sent", "deleted"]

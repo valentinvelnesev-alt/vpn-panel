@@ -341,6 +341,24 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         await send_new_screen(message, config, text, markup)
 
 
+async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
+    """Ставит (или убирает) клавиатуру «Меню / Помощь» под полем ввода.
+
+    Telegram не разрешает в одном сообщении и inline-кнопки, и клавиатуру
+    под полем ввода, поэтому её приходится отправлять отдельным сообщением.
+    Раньше оно так и висело в чате над меню («🚀 Название»). Теперь сразу
+    удаляем его: клавиатура у клиента остаётся, а в чате — только меню."""
+    sent = await message.answer(
+        t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
+        reply_markup=keyboards.bottom_keyboard(config),
+        disable_notification=True,
+    )
+    try:
+        await sent.delete()
+    except TelegramBadRequest:
+        pass  # не удалилось — останется как раньше, ничего не ломается
+
+
 def referral_code_from_payload(payload: str) -> str:
     """Код реферала из /start-параметра — наш и перенесённых ботов:
     ref_ABC123 — наш; refAbC12345 — Bedolaga (код целиком, вместе с «ref»);
@@ -387,12 +405,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
         )
         return
 
-    # Нижняя клавиатура ставится отдельным сообщением: в одном сообщении
-    # Telegram не разрешает и inline-кнопки, и клавиатуру под полем ввода.
-    await message.answer(
-        t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
-        reply_markup=keyboards.bottom_keyboard(config),
-    )
+    await _apply_bottom_keyboard(message, config)
     await _show_menu(message, config)
 
 
@@ -410,8 +423,7 @@ async def on_help_button(message: Message, config: Config, state: FSMContext) ->
     if not config.shows("help"):
         # Кнопку скрыли в панели, а у клиента ещё старая клавиатура —
         # показываем меню вместе с уже обновлённой клавиатурой.
-        await message.answer(t(config, "{@rocket} <b>{brand}</b>", brand=config.brand),
-                             reply_markup=keyboards.bottom_keyboard(config))
+        await _apply_bottom_keyboard(message, config)
         await _show_menu(message, config)
         return
     if config.support_url:
