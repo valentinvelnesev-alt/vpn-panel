@@ -165,7 +165,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         menu_hidden=list(row.menu_hidden or []),
         menu_columns=row.menu_columns or 1,
         menu_styles=dict(row.menu_styles or {}),
-        menu_mode=row.menu_mode or "keyboard",
+        menu_mode="commands",
         discount_percent=row.discount_percent or 0,
         discount_until=row.discount_until,
     )
@@ -417,6 +417,9 @@ async def save_settings(
     for field, value in data.model_dump().items():
         setattr(row, field, value)
     row.purchase_notify_chat_id = data.purchase_notify_chat_id or None
+    # Режим «клавиатура под полем ввода» убран: меню — всегда в кнопке меню
+    # Telegram (старые версии панели могут ещё прислать прежнее значение).
+    row.menu_mode = "commands"
     _audit(db, admin, "bot.settings", request)
     await db.flush()
     await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота

@@ -13,9 +13,6 @@ from aiogram.types import (
     CopyTextButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 
 from app.config import Config, PlanView, discounted_kopeks, format_rub
@@ -26,7 +23,8 @@ TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
 TOPUP_MIN_RUB = 10
 TOPUP_MAX_RUB = 10_000
 
-# Подписи кнопок нижней клавиатуры — они же условие в хендлерах.
+# Подписи старой нижней клавиатуры: её больше не ставим, но у давних
+# клиентов она может остаться — нажатия по-прежнему обрабатываются.
 BTN_MENU = "Меню"
 BTN_HELP = "Помощь"
 
@@ -42,37 +40,9 @@ MENU_BUTTONS: dict[str, str] = {
     "promo": "Промокод",
     "channel": "Наш канал",
     "support": "Поддержка",
-    "help": "Помощь (кнопка под полем ввода)",
+    "help": "Помощь (/help в кнопке меню)",
     "history": "История покупок",
 }
-
-
-def bottom_keyboard(config: Config) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
-    """Что поставить под полем ввода. В режиме «кнопка меню слева» прежнюю
-    клавиатуру нужно явно убрать: иначе она так и висит у клиентов."""
-    if config.menu_mode == "commands":
-        return ReplyKeyboardRemove()
-    return reply_menu(config)
-
-
-def keyboard_state(config: Config) -> str:
-    """Подпись клавиатуры под полем ввода: меняется, только когда в панели
-    поменяли режим или спрятали «Помощь» — тогда клиенту нужна новая."""
-    if config.menu_mode == "commands":
-        return "none"
-    return "menu+help" if config.shows("help") else "menu"
-
-
-def reply_menu(config: Config | None = None) -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура под полем ввода: «Меню» и «Помощь».
-
-    Иконок и цветов у неё быть не может — это возможности только у inline-
-    кнопок; здесь Telegram рисует обычный текст.
-    """
-    row = [KeyboardButton(text=BTN_MENU)]
-    if config is None or config.shows("help"):
-        row.append(KeyboardButton(text=BTN_HELP))
-    return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True, is_persistent=True)
 
 
 def _btn(

@@ -398,13 +398,14 @@ def test_cispay_webhook_signature() -> None:
     assert CisPayClient.is_paid({"status": "PAID"}) and not CisPayClient.is_paid({"status": "PENDING"})
 
 
-async def test_bottom_keyboard_sent_once_and_again_after_change(db) -> None:
-    from dataclasses import replace
+async def _start_messages(db, keyboard_state):
+    """Что бот отправит при /start клиенту с таким состоянием клавиатуры."""
+    from aiogram.types import ReplyKeyboardRemove
 
-    from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
-
+    user = await subs.get_or_create_user(db, FROM.id)
+    user.keyboard_state = keyboard_state
+    await db.commit()
     sent: list[object] = []
-
     deleted: list[bool] = []
 
     class Sent:
@@ -415,34 +416,19 @@ async def test_bottom_keyboard_sent_once_and_again_after_change(db) -> None:
         from_user = FROM
 
         async def answer(self, text, reply_markup=None, **kwargs):
-            sent.append(reply_markup)
+            sent.append(isinstance(reply_markup, ReplyKeyboardRemove))
             return Sent()
 
-    config = make_config()
-    await handlers._apply_bottom_keyboard(FakeMessage(), config)
-    await handlers._apply_bottom_keyboard(FakeMessage(), config)
-    # Клавиатура ставится один раз, а не на каждый /start.
-    assert len(sent) == 1 and isinstance(sent[0], ReplyKeyboardMarkup)
-    # Служебное сообщение удалено сразу — в чате остаётся только меню.
-    assert deleted == [True]
-
-    # Режим «кнопка меню слева» — прежнюю клавиатуру убираем, тоже один раз.
-    commands = replace(config, menu_mode="commands")
-    await handlers._apply_bottom_keyboard(FakeMessage(), commands)
-    await handlers._apply_bottom_keyboard(FakeMessage(), commands)
-    assert len(sent) == 2 and isinstance(sent[1], ReplyKeyboardRemove)
+    await handlers._remove_legacy_keyboard(FakeMessage())
+    await handlers._remove_legacy_keyboard(FakeMessage())
+    return sent, deleted
 
 
-async def test_no_keyboard_message_for_new_user_in_commands_mode(db) -> None:
-    from dataclasses import replace
+async def test_new_client_gets_menu_without_extra_messages(db) -> None:
+    assert await _start_messages(db, None) == ([], [])
 
-    sent: list[object] = []
 
-    class FakeMessage:
-        from_user = FROM
-
-        async def answer(self, text, reply_markup=None, **kwargs):
-            sent.append(reply_markup)
-
-    await handlers._apply_bottom_keyboard(FakeMessage(), replace(make_config(), menu_mode="commands"))
-    assert sent == []
+async def test_old_keyboard_removed_once_and_message_deleted(db) -> None:
+    # Давний клиент: одно «...» убирает клавиатуру и тут же удаляется,
+    # на следующий /start — уже ничего.
+    assert await _start_messages(db, "legacy") == ([True], [True])

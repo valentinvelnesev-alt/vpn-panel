@@ -206,15 +206,6 @@ def test_referral_button_named_as_requested() -> None:
     assert "Рефералка" in labels
 
 
-# ── Нижняя клавиатура ─────────────────────────────────────────────────
-def test_reply_keyboard_has_menu_and_help() -> None:
-    kb = keyboards.reply_menu()
-    labels = [b.text for row in kb.keyboard for b in row]
-    assert labels == [keyboards.BTN_MENU, keyboards.BTN_HELP]
-    assert kb.resize_keyboard is True
-    assert kb.is_persistent is True
-
-
 # ── Редиректор подписки ───────────────────────────────────────────────
 SUB_URL = "https://sub.example.com/abcdef123456"
 

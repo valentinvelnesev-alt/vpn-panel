@@ -22,7 +22,7 @@ const MENU_BUTTONS: [string, string, boolean, boolean][] = [
   ['promo', 'Промокод', true, true],
   ['channel', 'Наш канал', true, true],
   ['support', 'Поддержка', true, true],
-  ['help', '«Помощь» и /help', true, false],
+  ['help', '«Помощь» в кнопке меню Telegram', true, false],
   ['history', 'История покупок (в кабинете)', true, false],
 ]
 
@@ -255,46 +255,6 @@ function MenuEditor({ status }: { status: BotStatus }) {
             </div>
           </div>
         </div>
-      </Card>
-
-      <Card className="space-y-4">
-        <SectionTitle hint="«Меню» и «Помощь» — где их показывать клиенту.">
-          Кнопки «Меню» и «Помощь»
-        </SectionTitle>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {(
-            [
-              [
-                'commands',
-                'В кнопке меню слева · рекомендуем',
-                'Кнопка «Меню» Telegram рядом с полем ввода. Никаких лишних сообщений в чате, не мешает жесту «назад».',
-              ],
-              [
-                'keyboard',
-                'Под полем ввода',
-                'Две кнопки под строкой сообщения. Бот ставит их служебным сообщением и сразу его удаляет — в чате ничего лишнего.',
-              ],
-            ] as const
-          ).map(([mode, title, hint]) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => set('menu_mode', mode)}
-              className={cn(
-                'rounded-2xl border px-3 py-2 text-left text-sm transition-colors',
-                form.menu_mode === mode
-                  ? 'border-accent bg-accent/10'
-                  : 'border-border/60 hover:bg-surface-hover',
-              )}
-            >
-              <span className="font-medium">{title}</span>
-              <span className="mt-0.5 block text-xs text-muted">{hint}</span>
-            </button>
-          ))}
-        </div>
-        <p className="text-xs text-muted">
-          У клиентов кнопки сменятся, когда они в следующий раз нажмут /start или «Меню».
-        </p>
       </Card>
 
       <Card className="space-y-4">
