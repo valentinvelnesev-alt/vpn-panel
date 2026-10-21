@@ -25,6 +25,8 @@ from app.api.deps import DbSession
 from app.services import settings_service as cfg
 from shared import bus
 from shared.db.models import Payment, PaymentProvider, PaymentStatus
+from shared.payments.cispay import CisPayClient, CisPayError
+from shared.payments.cispay import verify_signature as verify_cispay_signature
 from shared.payments.cryptobot import CryptoBotClient, CryptoBotError
 from shared.payments.platega import PlategaClient, PlategaError
 from shared.payments.rollypay import RollyPayClient, RollyPayError
@@ -198,6 +200,54 @@ async def rollypay_webhook(request: Request, db: DbSession) -> dict:
         return {"ok": False, "reason": "verification failed"}
 
     if not RollyPayClient.is_paid(remote):
+        return {"ok": True, "applied": False}
+
+    await _mark_paid(db, payment)
+    return {"ok": True, "applied": True}
+
+
+@router.post("/cispay")
+async def cispay_webhook(request: Request, db: DbSession) -> dict:
+    check_rate_limit(request)
+    raw_body = await request.body()
+
+    values = await cfg.get_many(db, cfg.CISPAY_SHOP_ID, cfg.CISPAY_API_KEY)
+    shop_id, api_key = values[cfg.CISPAY_SHOP_ID], values[cfg.CISPAY_API_KEY]
+    if not shop_id or not api_key:
+        log.error("cisPay webhook пришёл, но провайдер не настроен")
+        return {"ok": False, "reason": "provider not configured"}
+
+    # Подпись обязательна: ключ у нас есть всегда, а без неё любой мог бы
+    # заставить панель дёргать API cisPay чужими id.
+    if not verify_cispay_signature(api_key, raw_body, request.headers.get("x-signature", "")):
+        log.warning("cisPay webhook: неверная подпись, отклонён")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid signature")
+
+    body = await _read_json(request)
+    external_id = str(body.get("id") or "")
+    if not external_id:
+        return {"ok": False, "reason": "no id in payload"}
+
+    payment = await db.scalar(
+        select(Payment).where(
+            Payment.provider == PaymentProvider.CISPAY,
+            Payment.external_id == external_id,
+        )
+    )
+    if payment is None:
+        log.warning("cisPay webhook: платёж %s не найден", external_id)
+        # 2xx: иначе cisPay будет повторять колбэк о чужом платеже.
+        return {"ok": False, "reason": "payment not found"}
+
+    payment.raw_payload = body
+    try:
+        remote = await CisPayClient(shop_id, api_key).get_payment(external_id)
+    except CisPayError as exc:
+        log.error("Не удалось подтвердить платёж cisPay %s: %s", external_id, exc)
+        # 5xx — пусть cisPay повторит позже, когда API снова ответит.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "verification failed") from exc
+
+    if not CisPayClient.is_paid(remote):
         return {"ok": True, "applied": False}
 
     await _mark_paid(db, payment)

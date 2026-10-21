@@ -17,6 +17,7 @@ from app import config as config_module
 from app.services import payment_processor
 from shared.db.models import Payment, PaymentProvider, PaymentStatus
 from shared.db.session import session
+from shared.payments.cispay import CisPayClient
 from shared.payments.cryptobot import CryptoBotClient
 from shared.payments.platega import PlategaClient
 from shared.payments.rollypay import RollyPayClient
@@ -67,6 +68,13 @@ async def _is_paid_at_provider(config, payment: Payment) -> bool:
             client = RollyPayClient(config.rollypay_api_key)
             data = await client.get_payment(payment.external_id)
             return RollyPayClient.is_paid(data)
+
+        if payment.provider == PaymentProvider.CISPAY:
+            if not (config.cispay_shop_id and config.cispay_api_key):
+                return False
+            client = CisPayClient(config.cispay_shop_id, config.cispay_api_key)
+            data = await client.get_payment(payment.external_id)
+            return CisPayClient.is_paid(data)
 
         if payment.provider == PaymentProvider.CRYPTOBOT:
             if not (config.cryptobot_enabled and config.cryptobot_token):

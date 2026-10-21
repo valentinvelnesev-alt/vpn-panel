@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Toggle } from '@/components/page'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type TrafficPackage } from '@/lib/api'
 
 type Draft = Omit<TrafficPackage, 'id'>
@@ -82,15 +83,11 @@ function PackageForm({
             onChange={(e) => set('sort_order', Number(e.target.value))}
           />
         </Field>
-        <label className="flex items-center gap-2 self-end text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={form.is_active}
-            onChange={(e) => set('is_active', e.target.checked)}
-          />
-          Показывать в боте
-        </label>
+        <Toggle
+          checked={form.is_active}
+          onChange={(value) => set('is_active', value)}
+          label="Показывать в боте"
+        />
       </div>
 
       {save.isError && <p className="text-sm text-danger">{(save.error as Error).message}</p>}
@@ -178,18 +175,17 @@ export default function BotTraffic() {
                   {item.is_active ? '' : ' · скрыт'}
                 </span>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <Button type="button" variant="ghost" onClick={() => setEditing(item.id)}>
-                  <Pencil className="size-4" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => remove.mutate(item.id)}
+              <div className="flex shrink-0 gap-1.5">
+                <RowAction
+                  icon={<Pencil className="size-4" />}
+                  label="Изменить"
+                  onClick={() => setEditing(item.id)}
+                />
+                <DeleteAction
+                  icon={<Trash2 className="size-4" />}
                   disabled={remove.isPending}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                  onConfirm={() => remove.mutate(item.id)}
+                />
               </div>
             </div>
           ),

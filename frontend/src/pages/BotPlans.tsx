@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Toggle } from '@/components/page'
 import { FolderPlus, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import {
   panel,
   type BotStatus,
@@ -115,15 +116,11 @@ export function PlanForm({
           />
         </Field>
         {personal ? (
-          <label className="flex items-center gap-2 self-end pb-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={form.is_active}
-              onChange={(e) => set('is_active', e.target.checked)}
-            />
-            Показывать клиенту в боте
-          </label>
+          <Toggle
+            checked={form.is_active}
+            onChange={(value) => set('is_active', value)}
+            label="Показывать клиенту в боте"
+          />
         ) : (
         <Field label="Категория (необязательно)">
           <select
@@ -326,14 +323,10 @@ function PlanRow({
           {!plan.is_active && ' · скрыт'}
         </span>
       </button>
-      <button
-        type="button"
-        onClick={onDelete}
-        className="text-muted hover:text-danger"
-        aria-label="Удалить тариф"
-      >
-        <Trash2 className="size-4" />
-      </button>
+      <div className="flex shrink-0 gap-1.5">
+        <RowAction icon={<Pencil className="size-4" />} label="Изменить" onClick={onEdit} />
+        <DeleteAction icon={<Trash2 className="size-4" />} onConfirm={onDelete} />
+      </div>
     </div>
   )
 }
@@ -413,29 +406,17 @@ function CategorySection({
               </Button>
               {category && (
                 <>
-                  <button
-                    type="button"
+                  <RowAction
+                    icon={<Pencil className="size-4" />}
+                    label="Переименовать"
                     onClick={() => setRenaming(true)}
-                    className="rounded-full p-2 text-muted hover:text-fg"
-                    aria-label="Переименовать категорию"
-                  >
-                    <Pencil className="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Удалить категорию «${category.title}»? Тарифы останутся, но окажутся «Без категории».`,
-                        )
-                      )
-                        remove.mutate()
-                    }}
-                    className="rounded-full p-2 text-muted hover:text-danger"
-                    aria-label="Удалить категорию"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
+                  />
+                  <DeleteAction
+                    icon={<Trash2 className="size-4" />}
+                    label="Удалить категорию"
+                    confirmLabel="Удалить? Тарифы останутся"
+                    onConfirm={() => remove.mutate()}
+                  />
                 </>
               )}
             </div>

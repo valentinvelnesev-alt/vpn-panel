@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { PageHeader } from '@/components/page'
+import { PageHeader, Toggle } from '@/components/page'
 import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type Providers } from '@/lib/api'
@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<string, string> = {
 const PROVIDER_LABEL: Record<string, string> = {
   platega: 'СБП / карта',
   rollypay: 'СБП (резерв)',
+  cispay: 'cisPay',
   cryptobot: 'Криптовалюта',
   stars: 'Telegram Stars',
 }
@@ -37,15 +38,11 @@ function PlategaCard({ providers }: { providers: Providers }) {
     <Card>
       <div className="flex items-center justify-between">
         <h2 className="font-medium">СБП / карта (Platega)</h2>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          Включено
-        </label>
+        <Toggle
+          checked={enabled}
+          onChange={(value) => setEnabled(value)}
+          label="Включено"
+        />
       </div>
       <form
         className="mt-4 space-y-3"
@@ -100,15 +97,11 @@ function RollyPayCard({ providers }: { providers: Providers }) {
     <Card>
       <div className="flex items-center justify-between">
         <h2 className="font-medium">СБП, резервный способ (RollyPay)</h2>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          Включено
-        </label>
+        <Toggle
+          checked={enabled}
+          onChange={(value) => setEnabled(value)}
+          label="Включено"
+        />
       </div>
       <form
         className="mt-4 space-y-3"
@@ -155,6 +148,99 @@ function RollyPayCard({ providers }: { providers: Providers }) {
   )
 }
 
+function CisPayCard({ providers }: { providers: Providers }) {
+  const queryClient = useQueryClient()
+  const [enabled, setEnabled] = useState(providers.cispay_enabled)
+  const [shopId, setShopId] = useState(providers.cispay_shop_id ?? '')
+  const [apiKey, setApiKey] = useState('')
+  const body = () => ({ enabled, shop_id: shopId.trim(), api_key: apiKey.trim() })
+
+  const check = useMutation({ mutationFn: () => panel.checkCisPay(body()) })
+  const save = useMutation({
+    mutationFn: () => panel.saveCisPay(body()),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['providers'], data)
+      setApiKey('')
+    },
+  })
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="font-medium">cisPay — СБП, карта, криптовалюта</h2>
+          <p className="mt-1 text-sm text-muted">
+            Клиент нажимает одну кнопку и сам выбирает способ на странице cisPay — из тех, что
+            подключены у вашего магазина. Ключи — в кабинете cisPay, раздел «Настройки магазина».
+            Если панель на домене с HTTPS, там же укажите адрес для вебхука (внизу этой
+            страницы).
+          </p>
+        </div>
+        <Toggle checked={enabled} onChange={setEnabled} label="Включено" />
+      </div>
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save.mutate()
+        }}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Shop ID">
+            <Input
+              value={shopId}
+              onChange={(e) => {
+                setShopId(e.target.value)
+                check.reset()
+              }}
+              placeholder="0190…-…"
+              autoComplete="off"
+            />
+          </Field>
+          <Field
+            label="API-ключ (cis_sec_…)"
+            hint={
+              providers.cispay_api_key_masked
+                ? `Сохранён: ${providers.cispay_api_key_masked}. Пусто — не менять.`
+                : 'Им же cisPay подписывает вебхуки — подпись проверяется.'
+            }
+          >
+            <Input
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value)
+                check.reset()
+              }}
+              autoComplete="off"
+            />
+          </Field>
+        </div>
+        {check.data && (
+          <p className={`text-sm ${check.data.ok ? 'text-success' : 'text-danger'}`}>
+            {check.data.message}
+          </p>
+        )}
+        {save.isError && <p className="text-sm text-danger">{(save.error as Error).message}</p>}
+        {save.isSuccess && <p className="text-sm text-success">Сохранено</p>}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={save.isPending}>
+            Сохранить
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={check.isPending}
+            onClick={() => check.mutate()}
+          >
+            {check.isPending ? 'Проверяю…' : 'Проверить подключение'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 function CryptoBotCard({ providers }: { providers: Providers }) {
   const queryClient = useQueryClient()
   const [enabled, setEnabled] = useState(providers.cryptobot_enabled)
@@ -172,15 +258,11 @@ function CryptoBotCard({ providers }: { providers: Providers }) {
     <Card>
       <div className="flex items-center justify-between">
         <h2 className="font-medium">Криптовалюта (@CryptoBot)</h2>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          Включено
-        </label>
+        <Toggle
+          checked={enabled}
+          onChange={(value) => setEnabled(value)}
+          label="Включено"
+        />
       </div>
       <form
         className="mt-4 space-y-3"
@@ -232,15 +314,11 @@ function StarsCard({ providers }: { providers: Providers }) {
             Не требует настройки. Официального курса к рублю нет — задайте свой ниже.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={providers.stars_enabled}
-            onChange={(e) => save.mutate({ enabled: e.target.checked })}
-          />
-          Включено
-        </label>
+        <Toggle
+          checked={providers.stars_enabled}
+          onChange={(value) => save.mutate({ enabled: value })}
+          label="Включено"
+        />
       </div>
       <form
         className="mt-4 flex flex-wrap items-end gap-2"
@@ -282,23 +360,26 @@ function WebhooksCard({ providers }: { providers: Providers }) {
   const rows: [string, string][] = [
     ['Platega', urls.platega],
     ['RollyPay', urls.rollypay],
+    ['cisPay', urls.cispay],
     ['CryptoBot', urls.cryptobot],
   ].filter((r): r is [string, string] => Boolean(r[1]))
 
   return (
     <Card>
       <h2 className="font-medium">Адреса для уведомлений об оплате</h2>
-      <p className="mt-1 text-sm text-muted">
-        Провайдеры не получают адрес колбэка при создании платежа — его нужно один раз
-        вписать в личном кабинете провайдера. Без этого оплата подтверждается только
-        опросом статуса (кнопка «Проверить оплату» и фоновая проверка каждые 30 секунд).
-      </p>
       {rows.length === 0 ? (
-        <p className="mt-3 text-sm text-danger">
-          Не задан публичный адрес панели (PANEL_PUBLIC_URL в .env) — вебхуки принимать
-          некуда.
+        <p className="mt-1 text-sm text-muted">
+          Панель открыта по IP, без домена и HTTPS — платёжки на такой адрес уведомления не
+          шлют, поэтому адресов здесь нет. Это не страшно: бот сам проверяет статус оплаты
+          каждые 30 секунд, а клиент может нажать «Проверить оплату» — доступ выдаётся
+          автоматически. Подключите домен, если хотите мгновенное подтверждение.
         </p>
       ) : (
+        <>
+        <p className="mt-1 text-sm text-muted">
+          Впишите адрес один раз в личном кабинете провайдера — тогда оплата подтверждается
+          мгновенно. Без него бот всё равно проверяет статус каждые 30 секунд.
+        </p>
         <dl className="mt-3 space-y-2 text-sm">
           {rows.map(([name, url]) => (
             <div key={name} className="flex flex-wrap items-baseline gap-x-3">
@@ -309,6 +390,7 @@ function WebhooksCard({ providers }: { providers: Providers }) {
             </div>
           ))}
         </dl>
+        </>
       )}
     </Card>
   )
@@ -369,6 +451,7 @@ export default function Payments() {
       />
       <PlategaCard providers={providers} />
       <RollyPayCard providers={providers} />
+      <CisPayCard providers={providers} />
       <CryptoBotCard providers={providers} />
       <StarsCard providers={providers} />
       <WebhooksCard providers={providers} />

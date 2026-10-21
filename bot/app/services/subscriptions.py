@@ -851,6 +851,7 @@ SALE_KIND_LABEL = {
 _METHOD_LABEL = {
     "platega": "Platega (СБП / карта)",
     "rollypay": "RollyPay (СБП)",
+    "cispay": "cisPay (СБП / карта / крипта)",
     "cryptobot": "CryptoBot",
     "stars": "Telegram Stars",
     "wallet": "баланс",

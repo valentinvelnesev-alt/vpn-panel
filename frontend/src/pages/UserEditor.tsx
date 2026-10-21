@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
-import { Button, Field, Input } from '@/components/ui'
+import { Button, DeleteAction, Field, Input } from '@/components/ui'
 import { panel, type PanelUser, type UserUpdate } from '@/lib/api'
 import { bytes, dateTime, untilExpiry } from '@/lib/format'
 import { usePanelTerms } from '@/lib/panelKind'
@@ -89,15 +89,13 @@ function DevicesSection({ userId }: { userId: string }) {
                     {device.updated_at && ` · ${dateTime(device.updated_at)}`}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => remove.mutate(device.hwid)}
+                <DeleteAction
+                  icon={<Trash2 className="size-4" />}
+                  label="Отвязать"
+                  confirmLabel="Точно отвязать?"
                   disabled={remove.isPending}
-                  className="shrink-0 text-muted transition-colors hover:text-danger"
-                  aria-label="Удалить устройство"
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                  onConfirm={() => remove.mutate(device.hwid)}
+                />
               </li>
             ))}
           </ul>

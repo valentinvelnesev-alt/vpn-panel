@@ -196,6 +196,9 @@ class Config:
     platega_secret: str | None = None
     rollypay_enabled: bool = False
     rollypay_api_key: str | None = None
+    cispay_enabled: bool = False
+    cispay_shop_id: str | None = None
+    cispay_api_key: str | None = None
     cryptobot_enabled: bool = False
     cryptobot_token: str | None = None
     stars_enabled: bool = False
@@ -203,6 +206,8 @@ class Config:
 
     # SOCKS5-прокси до Telegram; None — напрямую.
     proxy: str | None = None
+    # @username бота — для ссылки «вернуться в бот» со страницы оплаты.
+    bot_username: str | None = None
 
     loaded_at: datetime | None = None
 
@@ -263,6 +268,10 @@ class Config:
         return bool(self.rollypay_enabled and self.rollypay_api_key)
 
     @property
+    def cispay_ready(self) -> bool:
+        return bool(self.cispay_enabled and self.cispay_shop_id and self.cispay_api_key)
+
+    @property
     def cryptobot_ready(self) -> bool:
         return bool(self.cryptobot_enabled and self.cryptobot_token)
 
@@ -271,6 +280,7 @@ class Config:
         return (
             self.platega_ready
             or self.rollypay_ready
+            or self.cispay_ready
             or self.cryptobot_ready
             or self.stars_enabled
         )
@@ -326,6 +336,9 @@ async def load(db: AsyncSession) -> Config:
         "payment_platega_secret",
         "payment_rollypay_enabled",
         "payment_rollypay_api_key",
+        "payment_cispay_enabled",
+        "payment_cispay_shop_id",
+        "payment_cispay_api_key",
         "payment_cryptobot_enabled",
         "payment_cryptobot_token",
         "payment_stars_enabled",
@@ -386,6 +399,10 @@ async def load(db: AsyncSession) -> Config:
         platega_secret=raw.get("payment_platega_secret"),
         rollypay_enabled=flag("payment_rollypay_enabled"),
         rollypay_api_key=raw.get("payment_rollypay_api_key"),
+        cispay_enabled=flag("payment_cispay_enabled"),
+        cispay_shop_id=raw.get("payment_cispay_shop_id"),
+        cispay_api_key=raw.get("payment_cispay_api_key"),
+        bot_username=row.bot_username,
         cryptobot_enabled=flag("payment_cryptobot_enabled"),
         cryptobot_token=raw.get("payment_cryptobot_token"),
         stars_enabled=flag("payment_stars_enabled"),

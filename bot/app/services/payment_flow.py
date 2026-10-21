@@ -1,4 +1,4 @@
-"""Создание внешнего платежа (Platega / RollyPay / CryptoBot) до его подтверждения.
+"""Создание внешнего платежа (Platega / RollyPay / cisPay / CryptoBot) до его подтверждения.
 
 Сама оплата подтверждается вебхуком на бэкенде (см. backend webhooks.py) или
 опросом провайдера (payment_check.py) — здесь только заводим запись Payment
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config
 from shared.db.models import BotUser, Payment, PaymentProvider, PaymentPurpose
+from shared.payments.cispay import CisPayClient, CisPayError
 from shared.payments.cryptobot import CryptoBotClient, CryptoBotError
 from shared.payments.currency import CurrencyError, rub_to_crypto
 from shared.payments.platega import PlategaClient, PlategaError
@@ -33,11 +34,14 @@ def _ensure_configured(config: Config, provider: PaymentProvider) -> None:
         raise PaymentFlowError("Оплата картой сейчас недоступна")
     if provider is PaymentProvider.ROLLYPAY and not config.rollypay_ready:
         raise PaymentFlowError("Оплата через СБП сейчас недоступна")
+    if provider is PaymentProvider.CISPAY and not config.cispay_ready:
+        raise PaymentFlowError("Оплата через cisPay сейчас недоступна")
     if provider is PaymentProvider.CRYPTOBOT and not config.cryptobot_ready:
         raise PaymentFlowError("Оплата криптовалютой сейчас недоступна")
     if provider not in (
         PaymentProvider.PLATEGA,
         PaymentProvider.ROLLYPAY,
+        PaymentProvider.CISPAY,
         PaymentProvider.CRYPTOBOT,
     ):
         raise PaymentFlowError(f"Провайдер {provider} не поддерживает внешние счета")
@@ -83,11 +87,18 @@ async def create_external_payment(
             await db.flush()  # нужен payment.id для order_id
 
             pay_url = await _create_at_provider(
-                config, provider, payment, amount_kopeks / 100, description
+                config, provider, payment, amount_kopeks / 100, description, user
             )
             if not pay_url:
                 raise PaymentFlowError("Провайдер не вернул ссылку на оплату")
-    except (PlategaError, RollyPayError, CryptoBotError, CurrencyError, httpx.HTTPError) as exc:
+    except (
+        PlategaError,
+        RollyPayError,
+        CisPayError,
+        CryptoBotError,
+        CurrencyError,
+        httpx.HTTPError,
+    ) as exc:
         # Пользователю показывается общая фраза, но в лог пишем ответ
         # провайдера целиком — без этого причина отказа (например,
         # невалидное тело запроса) не видна вообще нигде.
@@ -105,6 +116,7 @@ async def _create_at_provider(
     payment: Payment,
     amount_rub: float,
     description: str,
+    user: BotUser,
 ) -> str:
     if provider is PaymentProvider.PLATEGA:
         client = PlategaClient(config.platega_merchant_id, config.platega_secret)
@@ -132,6 +144,22 @@ async def _create_at_provider(
             raise RollyPayError("в ответе нет payment_id")
         payment.external_id = str(external)
         return result.get("pay_url") or ""
+
+    if provider is PaymentProvider.CISPAY:
+        client = CisPayClient(config.cispay_shop_id, config.cispay_api_key)
+        result = await client.create_payment(
+            amount_kopeks=round(amount_rub * 100),
+            # order_id уникален в магазине: свой префикс, чтобы не пересечься
+            # с другими системами, подключёнными к тому же магазину cisPay.
+            order_id=f"vpn-{payment.id}",
+            customer_id=str(user.telegram_id),
+            description=description,
+            return_url=f"https://t.me/{config.bot_username}" if config.bot_username else None,
+        )
+        if not result.get("id"):
+            raise CisPayError(f"в ответе нет id платежа: {result}")
+        payment.external_id = str(result["id"])
+        return result.get("payment_url") or ""
 
     client = CryptoBotClient(config.cryptobot_token)
     asset = "USDT"

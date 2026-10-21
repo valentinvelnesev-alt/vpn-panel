@@ -354,6 +354,9 @@ export interface Providers {
   rollypay_enabled: boolean
   rollypay_api_key_masked: string | null
   rollypay_signing_secret_masked: string | null
+  cispay_enabled: boolean
+  cispay_shop_id: string | null
+  cispay_api_key_masked: string | null
   cryptobot_enabled: boolean
   cryptobot_token_masked: string | null
   stars_enabled: boolean
@@ -627,6 +630,13 @@ export const panel = {
   providers: () => api<Providers>('/payments/providers'),
   savePlatega: (json: { enabled: boolean; merchant_id: string; secret: string }) =>
     api<Providers>('/payments/providers/platega', { method: 'PUT', json }),
+  saveCisPay: (json: { enabled: boolean; shop_id: string; api_key: string }) =>
+    api<Providers>('/payments/providers/cispay', { method: 'PUT', json }),
+  checkCisPay: (json: { enabled: boolean; shop_id: string; api_key: string }) =>
+    api<{ ok: boolean; message: string }>('/payments/providers/cispay/check', {
+      method: 'POST',
+      json,
+    }),
   saveRollyPay: (json: { enabled: boolean; api_key: string; signing_secret: string }) =>
     api<Providers>('/payments/providers/rollypay', { method: 'PUT', json }),
   saveCryptoBot: (json: { enabled: boolean; token: string }) =>

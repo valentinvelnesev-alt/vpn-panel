@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Toggle } from '@/components/page'
 import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type ReferralSettings } from '@/lib/api'
@@ -45,15 +46,11 @@ export default function BotReferral() {
           save.mutate()
         }}
       >
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="size-4"
-            checked={form.referral_enabled}
-            onChange={(e) => set('referral_enabled', e.target.checked)}
-          />
-          Включена
-        </label>
+        <Toggle
+          checked={form.referral_enabled}
+          onChange={(value) => set('referral_enabled', value)}
+          label="Включена"
+        />
 
         {form.referral_enabled && (
           <div className="grid gap-4 sm:grid-cols-2">
@@ -77,15 +74,11 @@ export default function BotReferral() {
         )}
 
         <div className="border-t pt-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={form.referral_commission_enabled}
-              onChange={(e) => set('referral_commission_enabled', e.target.checked)}
-            />
-            Денежная комиссия на баланс (с каждой оплаты, 2 уровня)
-          </label>
+          <Toggle
+            checked={form.referral_commission_enabled}
+            onChange={(value) => set('referral_commission_enabled', value)}
+            label="Денежная комиссия на баланс (с каждой оплаты, 2 уровня)"
+          />
           <p className="mt-1 text-sm text-muted">
             Работает независимо от бонуса в днях выше: с каждой оплаты
             приглашённого на баланс пригласившего зачисляется процент, и ещё

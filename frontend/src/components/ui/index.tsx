@@ -1,8 +1,11 @@
-import type {
-  ButtonHTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  TextareaHTMLAttributes,
+import { Check, Copy } from 'lucide-react'
+import {
+  useEffect,
+  useState,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
 } from 'react'
 import { cn } from '@/lib/cn'
 
@@ -101,5 +104,94 @@ export function Field({
       {children}
       {hint && <span className="block text-xs text-muted">{hint}</span>}
     </label>
+  )
+}
+
+/**
+ * Небольшая кнопка действия в строке списка: иконка и подпись. Раньше были
+ * одни иконки — по стрелочке или карандашу не всегда понятно, что будет.
+ */
+export function RowAction({
+  icon,
+  label,
+  className,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { icon: ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      className={cn(
+        'inline-flex h-9 items-center gap-1.5 rounded-full border border-border/60 px-3 text-xs font-medium',
+        'text-fg transition-colors hover:bg-surface-hover disabled:pointer-events-none disabled:opacity-50',
+        className,
+      )}
+      {...props}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  )
+}
+
+/**
+ * Удаление в два нажатия: первое превращает кнопку в красную «Точно
+ * удалить?», второе удаляет. Без модальных окон, и случайный клик ничего
+ * не сносит. Через 4 секунды без ответа кнопка возвращается обратно.
+ */
+export function DeleteAction({
+  onConfirm,
+  label = 'Удалить',
+  confirmLabel = 'Точно удалить?',
+  icon,
+  disabled,
+}: {
+  onConfirm: () => void
+  label?: string
+  confirmLabel?: string
+  icon: ReactNode
+  disabled?: boolean
+}) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const timer = window.setTimeout(() => setArmed(false), 4000)
+    return () => window.clearTimeout(timer)
+  }, [armed])
+
+  return (
+    <RowAction
+      icon={icon}
+      label={armed ? confirmLabel : label}
+      disabled={disabled}
+      className={armed ? 'border-danger bg-danger text-white hover:bg-danger' : 'text-danger'}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onConfirm()
+      }}
+    />
+  )
+}
+
+/** «Копировать» с подтверждением «Скопировано» — видно, что сработало. */
+export function CopyAction({ text, label = 'Копировать' }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  return (
+    <RowAction
+      icon={copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+      label={copied ? 'Скопировано' : label}
+      onClick={() => {
+        navigator.clipboard?.writeText(text).then(() => setCopied(true))
+      }}
+    />
   )
 }

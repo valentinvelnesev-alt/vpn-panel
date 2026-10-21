@@ -34,6 +34,11 @@ ROLLYPAY_API_KEY: Final = "payment_rollypay_api_key"
 # колбэк принимается, а подтверждение всё равно идёт перезапросом статуса.
 ROLLYPAY_SIGNING_SECRET: Final = "payment_rollypay_signing_secret"
 
+CISPAY_ENABLED: Final = "payment_cispay_enabled"
+CISPAY_SHOP_ID: Final = "payment_cispay_shop_id"
+# Им же cisPay подписывает вебхуки (X-Signature).
+CISPAY_API_KEY: Final = "payment_cispay_api_key"
+
 CRYPTOBOT_ENABLED: Final = "payment_cryptobot_enabled"
 CRYPTOBOT_TOKEN: Final = "payment_cryptobot_token"
 
@@ -49,6 +54,7 @@ SECRET_KEYS: Final = frozenset(
         PLATEGA_SECRET,
         ROLLYPAY_API_KEY,
         ROLLYPAY_SIGNING_SECRET,
+        CISPAY_API_KEY,
         CRYPTOBOT_TOKEN,
     }
 )

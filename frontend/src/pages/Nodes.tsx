@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PageHeader } from '@/components/page'
 import { Power, RotateCw } from 'lucide-react'
-import { Button, Card } from '@/components/ui'
+import { Button, Card, DeleteAction } from '@/components/ui'
 import { panel, type Node } from '@/lib/api'
 import { countryFlag } from '@/lib/flag'
 import { bytes, dateTime, number, uptime } from '@/lib/format'
@@ -114,19 +114,25 @@ export default function Nodes() {
                 <RotateCw className="size-4" />
                 Перезапустить
               </Button>
-              <Button
-                variant="ghost"
-                onClick={() =>
-                  action.mutate({
-                    uuid: node.uuid,
-                    act: node.disabled ? 'enable' : 'disable',
-                  })
-                }
-                disabled={action.isPending}
-              >
-                <Power className="size-4" />
-                {node.disabled ? 'Включить' : 'Отключить'}
-              </Button>
+              {node.disabled ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => action.mutate({ uuid: node.uuid, act: 'enable' })}
+                  disabled={action.isPending}
+                >
+                  <Power className="size-4" />
+                  Включить
+                </Button>
+              ) : (
+                // Отключение роняет VPN у всех на ноде — переспрашиваем.
+                <DeleteAction
+                  icon={<Power className="size-4" />}
+                  label="Отключить"
+                  confirmLabel="Отключить для всех?"
+                  disabled={action.isPending}
+                  onConfirm={() => action.mutate({ uuid: node.uuid, act: 'disable' })}
+                />
+              )}
               <span className="ml-auto text-xs text-muted">
                 {node.xray_version && `Xray ${node.xray_version}`}
               </span>

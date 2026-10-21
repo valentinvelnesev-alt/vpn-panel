@@ -20,6 +20,9 @@ class ProvidersOut(BaseModel):
     rollypay_enabled: bool
     rollypay_api_key_masked: str | None
     rollypay_signing_secret_masked: str | None = None
+    cispay_enabled: bool = False
+    cispay_shop_id: str | None = None
+    cispay_api_key_masked: str | None = None
     cryptobot_enabled: bool
     cryptobot_token_masked: str | None
     stars_enabled: bool
@@ -33,11 +36,14 @@ def _webhook_urls() -> dict[str, str]:
     from app.core.config import settings
 
     base = (settings.public_url or "").rstrip("/")
-    if not base:
+    # Платёжки шлют колбэки только на домен с HTTPS: панели по IP адреса
+    # не показываем — их всё равно не примет ни один кабинет провайдера.
+    if not base.startswith("https://"):
         return {}
     return {
         "platega": f"{base}/api/v1/webhooks/platega",
         "rollypay": f"{base}/api/v1/webhooks/rollypay",
+        "cispay": f"{base}/api/v1/webhooks/cispay",
         "cryptobot": f"{base}/api/v1/webhooks/cryptobot",
     }
 
@@ -52,6 +58,9 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         cfg.ROLLYPAY_ENABLED,
         cfg.ROLLYPAY_API_KEY,
         cfg.ROLLYPAY_SIGNING_SECRET,
+        cfg.CISPAY_ENABLED,
+        cfg.CISPAY_SHOP_ID,
+        cfg.CISPAY_API_KEY,
         cfg.CRYPTOBOT_ENABLED,
         cfg.CRYPTOBOT_TOKEN,
         cfg.STARS_ENABLED,
@@ -69,6 +78,11 @@ async def get_providers(admin: CurrentAdmin, db: DbSession) -> ProvidersOut:
         else None,
         rollypay_signing_secret_masked=mask(values[cfg.ROLLYPAY_SIGNING_SECRET])
         if values[cfg.ROLLYPAY_SIGNING_SECRET]
+        else None,
+        cispay_enabled=values[cfg.CISPAY_ENABLED] == "true",
+        cispay_shop_id=values[cfg.CISPAY_SHOP_ID],
+        cispay_api_key_masked=mask(values[cfg.CISPAY_API_KEY])
+        if values[cfg.CISPAY_API_KEY]
         else None,
         cryptobot_enabled=values[cfg.CRYPTOBOT_ENABLED] == "true",
         cryptobot_token_masked=mask(values[cfg.CRYPTOBOT_TOKEN])
@@ -144,6 +158,81 @@ async def save_rollypay(
         AuditLog(
             admin_id=admin.id,
             action="payments.rollypay",
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+    from shared import bus
+
+    await db.commit()  # видно другим сессиям ДО pub/sub-уведомления бота
+    await bus.publish(bus.CMD_RELOAD)
+    return await get_providers(admin, db)
+
+
+class CisPayIn(BaseModel):
+    enabled: bool
+    shop_id: str = Field(default="", max_length=64)
+    # Пусто = оставить прежний ключ.
+    api_key: str = Field(default="", max_length=256)
+
+
+class CisPayCheckOut(BaseModel):
+    ok: bool
+    message: str
+
+
+@router.post("/providers/cispay/check", response_model=CisPayCheckOut)
+async def check_cispay(data: CisPayIn, admin: CurrentAdmin, db: DbSession) -> CisPayCheckOut:
+    """Проверяет Shop ID и ключ и показывает, какие способы оплаты включены
+    у магазина — до того, как клиенты увидят кнопку в боте."""
+    from shared.payments.cispay import CisPayClient, CisPayError
+
+    api_key = data.api_key or await cfg.get(db, cfg.CISPAY_API_KEY)
+    shop_id = data.shop_id.strip() or await cfg.get(db, cfg.CISPAY_SHOP_ID)
+    if not shop_id or not api_key:
+        return CisPayCheckOut(ok=False, message="Укажите Shop ID и API-ключ")
+    try:
+        info = await CisPayClient(shop_id, api_key).capabilities()
+    except CisPayError as exc:
+        return CisPayCheckOut(ok=False, message=str(exc))
+    names = {"CARD": "карта", "SBP": "СБП", "CRYPTO": "криптовалюта"}
+    active = [
+        names.get(str(m.get("payment_method")), str(m.get("payment_method")))
+        for m in info.get("payment_methods") or []
+        if m.get("is_active")
+    ]
+    if not info.get("is_active", True):
+        return CisPayCheckOut(ok=False, message="Ключи верные, но магазин в cisPay не активен")
+    if not active:
+        return CisPayCheckOut(
+            ok=False, message="Ключи верные, но у магазина не подключён ни один способ оплаты"
+        )
+    store = info.get("store_name") or "магазин"
+    return CisPayCheckOut(ok=True, message=f"Подключено: «{store}», способы: {', '.join(active)}")
+
+
+@router.put("/providers/cispay", response_model=ProvidersOut)
+async def save_cispay(
+    data: CisPayIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> ProvidersOut:
+    shop_id = data.shop_id.strip()
+    if data.enabled and not (
+        (shop_id or await cfg.get(db, cfg.CISPAY_SHOP_ID))
+        and (data.api_key or await cfg.get(db, cfg.CISPAY_API_KEY))
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Чтобы включить cisPay, укажите Shop ID и API-ключ магазина",
+        )
+    await cfg.set_(db, cfg.CISPAY_ENABLED, "true" if data.enabled else "false")
+    if shop_id:
+        await cfg.set_(db, cfg.CISPAY_SHOP_ID, shop_id)
+    if data.api_key:
+        await cfg.set_(db, cfg.CISPAY_API_KEY, data.api_key.strip())
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action="payments.cispay",
             ip=request.client.host if request.client else None,
             created_at=datetime.now(UTC),
         )

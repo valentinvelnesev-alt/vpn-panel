@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { DatabaseBackup, Download, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { PageHeader } from '@/components/page'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { PageHeader, Toggle } from '@/components/page'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type BackupFile, type BackupSchedule } from '@/lib/api'
 import { bytes, dateTime } from '@/lib/format'
 
@@ -75,15 +75,11 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
 
   return (
     <div className="mt-4 space-y-3 rounded-2xl border border-border/60 p-4">
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="size-4"
-          checked={form.enabled}
-          onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-        />
-        Делать копии автоматически
-      </label>
+      <Toggle
+        checked={form.enabled}
+        onChange={(value) => setForm({ ...form, enabled: value })}
+        label="Делать копии автоматически"
+      />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Каждые, часов" hint="24 — раз в сутки">
           <Input
@@ -172,39 +168,32 @@ function BackupsCard() {
         {data?.files.length === 0 && <p className="text-sm text-muted">Копий пока нет</p>}
         {data?.files.map((file) => (
           <div key={file.name} className="space-y-2">
-            <div className="flex items-center justify-between gap-3 rounded-2xl bg-bg px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-bg/60 px-3 py-2.5 text-sm">
               <div className="min-w-0">
-                <p>{dateTime(file.created_at)}</p>
+                <p className="font-medium">{dateTime(file.created_at)}</p>
                 <p className="truncate text-xs text-muted">
                   {bytes(file.size_bytes)} · {kindOf(file)}
                 </p>
               </div>
-              <div className="flex shrink-0 gap-1">
+              <div className="flex flex-wrap gap-1.5">
                 <a
                   href={panel.backupDownloadUrl(file.name)}
-                  className="inline-flex size-10 items-center justify-center rounded-full hover:bg-surface-hover"
-                  title="Скачать"
                   download
+                  className="inline-flex h-9 items-center gap-1.5 rounded-full border border-border/60 px-3 text-xs font-medium transition-colors hover:bg-surface-hover"
                 >
                   <Download className="size-4" />
+                  Скачать
                 </a>
-                <Button
-                  variant="ghost"
-                  className="px-3"
-                  title="Восстановить из этой копии"
-                  onClick={() => setRestoring(file.name)}
-                >
-                  <RotateCcw className="size-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="px-3 text-danger"
-                  title="Удалить копию"
+                <RowAction
+                  icon={<RotateCcw className="size-4" />}
+                  label="Восстановить"
+                  onClick={() => setRestoring(restoring === file.name ? null : file.name)}
+                />
+                <DeleteAction
+                  icon={<Trash2 className="size-4" />}
                   disabled={remove.isPending}
-                  onClick={() => remove.mutate(file.name)}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                  onConfirm={() => remove.mutate(file.name)}
+                />
               </div>
             </div>
             {restoring === file.name && (

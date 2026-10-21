@@ -347,3 +347,52 @@ async def test_late_payment_on_expired_invoice_still_applies(db, monkeypatch) ->
     await db.refresh(payment)
     assert payment.status == PaymentStatus.PAID
     assert handled == [payment.id]
+
+
+# ── cisPay ────────────────────────────────────────────────────────────
+async def test_cispay_invoice_created_with_customer_and_return_link(db, monkeypatch) -> None:
+    from app.services import payment_flow
+    from shared.payments import cispay
+
+    sent: dict = {}
+
+    async def fake_create(self, **kwargs):
+        sent.update(kwargs)
+        return {"id": "cis-tx-9", "payment_url": "https://pay.cispay.app/cis-tx-9", "status": "PENDING"}
+
+    monkeypatch.setattr(cispay.CisPayClient, "create_payment", fake_create)
+    config = make_config(
+        cispay_enabled=True, cispay_shop_id="shop", cispay_api_key="key", bot_username="deal_bot"
+    )
+    assert config.cispay_ready and config.any_payment_ready
+    user = await subs.get_or_create_user(db, 4242)
+    await db.flush()
+
+    payment, url = await payment_flow.create_external_payment(
+        db,
+        config,
+        user,
+        purpose=PaymentPurpose.TOPUP,
+        amount_kopeks=15049,
+        provider=PaymentProvider.CISPAY,
+        description="Пополнение баланса",
+    )
+    assert payment.external_id == "cis-tx-9" and url.endswith("cis-tx-9")
+    assert sent["amount_kopeks"] == 15049
+    assert sent["customer_id"] == "4242"
+    assert sent["order_id"] == f"vpn-{payment.id}"
+    assert sent["return_url"] == "https://t.me/deal_bot"
+
+
+def test_cispay_webhook_signature() -> None:
+    import hashlib
+    import hmac
+
+    from shared.payments.cispay import CisPayClient, verify_signature
+
+    body = b'{"id":"x","status":"PAID"}'
+    good = hmac.new(b"key", body, hashlib.sha256).hexdigest()
+    assert verify_signature("key", body, good)
+    assert not verify_signature("key", body, "0" * 64)
+    assert not verify_signature("key", body + b" ", good)
+    assert CisPayClient.is_paid({"status": "PAID"}) and not CisPayClient.is_paid({"status": "PENDING"})

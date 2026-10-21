@@ -324,6 +324,9 @@ def providers_menu(
         rows.append([_btn(config, "СБП / карта", callback_data=f"pay:{purpose}:platega:{target}", icon="sbp")])
     if config.rollypay_ready:
         rows.append([_btn(config, "СБП (резерв)", callback_data=f"pay:{purpose}:rollypay:{target}", icon="sbp")])
+    if config.cispay_ready:
+        # Способ (СБП, карта, крипта) клиент выбирает на странице cisPay.
+        rows.append([_btn(config, "СБП / карта / крипта", callback_data=f"pay:{purpose}:cispay:{target}", icon="card")])
     if config.cryptobot_ready:
         rows.append([_btn(config, "Криптовалюта", callback_data=f"pay:{purpose}:cryptobot:{target}", icon="crypto")])
     if config.stars_enabled:

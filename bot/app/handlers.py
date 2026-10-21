@@ -1928,6 +1928,7 @@ _SOURCE_LABEL = {
     "stars": "Telegram Stars",
     "platega": "СБП / карта",
     "rollypay": "СБП",
+    "cispay": "cisPay",
     "cryptobot": "криптовалюта",
     "manual": "выдано администратором",
     "admin": "выдано администратором",

@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Pencil, Trash2 } from 'lucide-react'
+import { Toggle } from '@/components/page'
+import { Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, CopyAction, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type AdLink, type AdLinkInput, type AdLinksState } from '@/lib/api'
 import { number } from '@/lib/format'
 
@@ -137,15 +138,11 @@ export default function BotAdLinks() {
                 <option value="manual">Только показывать (плачу сам)</option>
               </select>
             </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-4"
-                checked={form.is_active}
-                onChange={(e) => set('is_active', e.target.checked)}
-              />
-              Активна
-            </label>
+            <Toggle
+              checked={form.is_active}
+              onChange={(value) => set('is_active', value)}
+              label="Активна"
+            />
             {save.isError && <p className="text-sm text-danger">{(save.error as Error).message}</p>}
             <div className="flex gap-2">
               <Button
@@ -176,36 +173,18 @@ export default function BotAdLinks() {
                         {!link.is_active && ' · выключена'}
                       </span>
                     </div>
-                    <div className="flex shrink-0 gap-1">
-                      {link.url && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          aria-label="Копировать ссылку"
-                          onClick={() => navigator.clipboard?.writeText(link.url!)}
-                        >
-                          <Copy className="size-4" />
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        aria-label="Изменить"
+                    <div className="flex flex-wrap gap-1.5">
+                      {link.url && <CopyAction text={link.url} />}
+                      <RowAction
+                        icon={<Pencil className="size-4" />}
+                        label="Изменить"
                         onClick={() => edit(link)}
-                      >
-                        <Pencil className="size-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        aria-label="Удалить"
-                        onClick={() => {
-                          if (confirm(`Удалить ссылку «${link.name}» вместе со статистикой?`))
-                            remove.mutate(link.id)
-                        }}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      />
+                      <DeleteAction
+                        icon={<Trash2 className="size-4" />}
+                        confirmLabel="Удалить со статистикой?"
+                        onConfirm={() => remove.mutate(link.id)}
+                      />
                     </div>
                   </div>
                   {link.url && <code className="block break-all text-xs text-muted">{link.url}</code>}

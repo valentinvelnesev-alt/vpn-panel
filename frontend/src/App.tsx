@@ -1,29 +1,38 @@
 import { useQuery } from '@tanstack/react-query'
+import { lazy } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import AuroraBackground from '@/components/AuroraBackground'
 import Layout from '@/components/Layout'
 import { auth } from '@/lib/api'
-import Analytics from '@/pages/Analytics'
-import BotBonuses from '@/pages/bot/Bonuses'
-import BotConnection from '@/pages/bot/Connection'
-import BotMenu from '@/pages/bot/Menu'
-import BotNotifications from '@/pages/bot/Notifications'
-import BotPlansPage from '@/pages/bot/Plans'
-import BotTrial from '@/pages/bot/Trial'
 import { useBrand } from '@/lib/brand'
-import Broadcasts from '@/pages/Broadcasts'
-import Clients from '@/pages/Clients'
-import Dashboard from '@/pages/Dashboard'
 import Login from '@/pages/Login'
-import Nodes from '@/pages/Nodes'
-import Payments from '@/pages/Payments'
-import SettingsConnection, {
-  SettingsAppearance,
-  SettingsImport,
-  SettingsSecurity,
-} from '@/pages/Settings'
-import SettingsBackups from '@/pages/SettingsBackups'
-import Users from '@/pages/Users'
+
+// Разделы грузятся по мере открытия: панель приходит в браузер не одним
+// файлом на полмегабайта, а маленькими кусками — первый вход быстрее.
+const Analytics = lazy(() => import('@/pages/Analytics'))
+const BotBonuses = lazy(() => import('@/pages/bot/Bonuses'))
+const BotConnection = lazy(() => import('@/pages/bot/Connection'))
+const BotMenu = lazy(() => import('@/pages/bot/Menu'))
+const BotNotifications = lazy(() => import('@/pages/bot/Notifications'))
+const BotPlansPage = lazy(() => import('@/pages/bot/Plans'))
+const BotTrial = lazy(() => import('@/pages/bot/Trial'))
+const Broadcasts = lazy(() => import('@/pages/Broadcasts'))
+const Clients = lazy(() => import('@/pages/Clients'))
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const Nodes = lazy(() => import('@/pages/Nodes'))
+const Payments = lazy(() => import('@/pages/Payments'))
+const SettingsConnection = lazy(() => import('@/pages/Settings'))
+const SettingsAppearance = lazy(() =>
+  import('@/pages/Settings').then((m) => ({ default: m.SettingsAppearance })),
+)
+const SettingsImport = lazy(() =>
+  import('@/pages/Settings').then((m) => ({ default: m.SettingsImport })),
+)
+const SettingsSecurity = lazy(() =>
+  import('@/pages/Settings').then((m) => ({ default: m.SettingsSecurity })),
+)
+const SettingsBackups = lazy(() => import('@/pages/SettingsBackups'))
+const Users = lazy(() => import('@/pages/Users'))
 
 // Заглушки разделов — наполняются на этапах 2–5.
 const Soon = ({ title }: { title: string }) => (

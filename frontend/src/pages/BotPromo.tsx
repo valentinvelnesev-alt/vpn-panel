@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2 } from 'lucide-react'
+import { Toggle } from '@/components/page'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type Promo, type PromoInput } from '@/lib/api'
 import { number } from '@/lib/format'
 
@@ -65,15 +66,11 @@ function PromoForm({
           />
         </Field>
       </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="size-4"
-          checked={form.is_active}
-          onChange={(e) => set('is_active', e.target.checked)}
-        />
-        Активен
-      </label>
+      <Toggle
+        checked={form.is_active}
+        onChange={(value) => set('is_active', value)}
+        label="Активен"
+      />
       <div className="flex gap-2">
         <Button type="submit" disabled={pending}>
           Сохранить
@@ -166,14 +163,17 @@ export default function BotPromo() {
                   {!promo.is_active && ' · выключен'}
                 </span>
               </button>
-              <button
-                type="button"
-                onClick={() => remove.mutate(promo.id)}
-                className="text-muted hover:text-danger"
-                aria-label="Удалить промокод"
-              >
-                <Trash2 className="size-4" />
-              </button>
+              <div className="flex shrink-0 gap-1.5">
+                <RowAction
+                  icon={<Pencil className="size-4" />}
+                  label="Изменить"
+                  onClick={() => setEditing(promo.id)}
+                />
+                <DeleteAction
+                  icon={<Trash2 className="size-4" />}
+                  onConfirm={() => remove.mutate(promo.id)}
+                />
+              </div>
             </div>
           ),
         )}

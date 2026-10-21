@@ -28,13 +28,28 @@ def test_providers_start_disabled(client: TestClient) -> None:
         "rollypay_enabled": False,
         "rollypay_api_key_masked": None,
         "rollypay_signing_secret_masked": None,
+        "cispay_enabled": False,
+        "cispay_shop_id": None,
+        "cispay_api_key_masked": None,
         "cryptobot_enabled": False,
         "cryptobot_token_masked": None,
         "stars_enabled": False,
         "stars_rub_per_star": 1.8,
     }
-    # Адреса колбэков собираются от публичного адреса панели.
-    assert webhook_urls["rollypay"].endswith("/api/v1/webhooks/rollypay")
+    # Панель по http (режим IP): платёжки туда колбэки не шлют — адресов нет.
+    assert webhook_urls == {}
+
+
+def test_webhook_urls_only_for_https_panel(client: TestClient, monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "panel_public_url", "https://panel.example.com")
+    urls = client.get("/api/v1/payments/providers").json()["webhook_urls"]
+    assert urls["rollypay"] == "https://panel.example.com/api/v1/webhooks/rollypay"
+    assert urls["cispay"] == "https://panel.example.com/api/v1/webhooks/cispay"
+
+    monkeypatch.setattr(settings, "panel_public_url", "http://203.0.113.5:4250")
+    assert client.get("/api/v1/payments/providers").json()["webhook_urls"] == {}
 
 
 def test_stars_rate_saved(client: TestClient) -> None:

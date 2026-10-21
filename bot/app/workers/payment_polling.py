@@ -31,6 +31,7 @@ EXPIRE_AFTER = timedelta(hours=24)
 _EXTERNAL_PROVIDERS = (
     PaymentProvider.PLATEGA,
     PaymentProvider.ROLLYPAY,
+    PaymentProvider.CISPAY,
     PaymentProvider.CRYPTOBOT,
 )
 

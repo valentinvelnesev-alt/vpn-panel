@@ -27,7 +27,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { Suspense, useEffect, useRef, useState, type MouseEvent } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { auth } from '@/lib/api'
 import { useBotStatus } from '@/lib/botSettings'
@@ -357,7 +357,10 @@ export default function Layout() {
 
       {/* Снизу запас под всплывающую панель «Сохранить». */}
       <main className="min-w-0 flex-1 px-4 pb-28 pt-6 lg:px-8">
-        <Outlet />
+        {/* Меню остаётся на месте, пока догружается код раздела. */}
+        <Suspense fallback={<p className="text-sm text-muted">Загрузка…</p>}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   )

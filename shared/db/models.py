@@ -554,6 +554,7 @@ class ExpiryNotification(Base):
 class PaymentProvider(StrEnum):
     PLATEGA = "platega"
     ROLLYPAY = "rollypay"
+    CISPAY = "cispay"
     CRYPTOBOT = "cryptobot"
     STARS = "stars"
 

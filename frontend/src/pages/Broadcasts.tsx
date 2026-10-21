@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PageHeader } from '@/components/page'
-import { ImagePlus, Send, Trash2, X } from 'lucide-react'
+import { ImagePlus, Send, Square, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type BroadcastButton, type BroadcastRow, type Segment } from '@/lib/api'
 import { dateTime, number } from '@/lib/format'
 
@@ -76,14 +76,12 @@ function BroadcastCard({
           </p>
         </div>
         {(live.status === 'scheduled' || live.status === 'sending') && (
-          <Button
-            variant="ghost"
-            className="h-8 px-2 text-danger"
-            title={live.status === 'sending' ? 'Остановить рассылку' : 'Отменить рассылку'}
-            onClick={() => onCancel(live.id)}
-          >
-            <Trash2 className="size-4" />
-          </Button>
+          <DeleteAction
+            icon={<Square className="size-3.5" />}
+            label={live.status === 'sending' ? 'Остановить' : 'Отменить'}
+            confirmLabel={live.status === 'sending' ? 'Точно остановить?' : 'Точно отменить?'}
+            onConfirm={() => onCancel(live.id)}
+          />
         )}
       </div>
 
@@ -281,13 +279,12 @@ export default function Broadcasts() {
                       setButtons(next)
                     }}
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
+                  <RowAction
+                    icon={<Trash2 className="size-4" />}
+                    label="Убрать"
+                    className="h-11 text-danger"
                     onClick={() => setButtons(buttons.filter((_, j) => j !== i))}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  />
                 </div>
               ))}
               {buttons.length < 8 && (

@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PageHeader } from '@/components/page'
-import { Ban, Contact, Plus, Search, Star, Trash2, Wallet } from 'lucide-react'
+import { Ban, Contact, Pencil, Plus, Search, Star, Trash2, Wallet } from 'lucide-react'
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
-import { Button, Card, Field, Input } from '@/components/ui'
+import { Button, Card, DeleteAction, Field, Input, RowAction } from '@/components/ui'
 import { panel, type ClientDetail, type ClientRow, type PlanInput } from '@/lib/api'
 import { dateTime, number, untilExpiry } from '@/lib/format'
 import { EMPTY_PLAN, PlanForm } from './BotPlans'
@@ -28,6 +28,7 @@ const SOURCE_LABEL: Record<string, string> = {
   stars: 'Telegram Stars',
   platega: 'СБП / карта',
   rollypay: 'СБП',
+  cispay: 'cisPay',
   cryptobot: 'криптовалюта',
   promo: 'промокод',
   admin: 'выдано администратором',
@@ -194,14 +195,17 @@ function PersonalPlans({ client }: { client: ClientDetail }) {
                 {!plan.is_active && ' · скрыт'}
               </span>
             </button>
-            <button
-              type="button"
-              onClick={() => remove.mutate(plan.id)}
-              className="text-muted hover:text-danger"
-              aria-label="Удалить тариф"
-            >
-              <Trash2 className="size-4" />
-            </button>
+            <div className="flex shrink-0 gap-1.5">
+              <RowAction
+                icon={<Pencil className="size-4" />}
+                label="Изменить"
+                onClick={() => setEditing(plan.id)}
+              />
+              <DeleteAction
+                icon={<Trash2 className="size-4" />}
+                onConfirm={() => remove.mutate(plan.id)}
+              />
+            </div>
           </div>
         ),
       )}
