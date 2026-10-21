@@ -109,3 +109,38 @@ async def test_block_and_unblock_client(client: TestClient) -> None:
 def test_block_requires_auth() -> None:
     with TestClient(app) as anon:
         assert anon.post("/api/v1/bot/clients/1/block", json={"blocked": True}).status_code == 401
+
+
+# ── Оформление панели ────────────────────────────────────────────────
+def test_theme_accent_and_background(client: TestClient, tmp_path, monkeypatch) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    public = client.get("/api/v1/settings/brand/public").json()
+    assert public["accent"] == "blue" and public["background_url"] is None
+
+    assert client.put("/api/v1/settings/theme", json={"accent": "violet"}).status_code == 200
+    assert client.put("/api/v1/settings/theme", json={"accent": "#ff0000"}).status_code == 422
+
+    bad = client.put(
+        "/api/v1/settings/theme/background", files={"file": ("x.txt", b"hi", "text/plain")}
+    )
+    assert bad.status_code == 422
+    first = client.put(
+        "/api/v1/settings/theme/background", files={"file": ("bg.png", b"png", "image/png")}
+    ).json()
+    second = client.put(
+        "/api/v1/settings/theme/background", files={"file": ("bg.jpg", b"jpg", "image/jpeg")}
+    ).json()
+    # Старый файл удаляется — в uploads не копится мусор.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [second["background_url"].rsplit("/", 1)[1]]
+    assert first["background_url"] != second["background_url"]
+
+    with TestClient(app) as anon:
+        public = anon.get("/api/v1/settings/brand/public").json()
+    assert public["accent"] == "violet"
+    assert public["background_url"] == second["background_url"]
+
+    cleared = client.delete("/api/v1/settings/theme/background").json()
+    assert cleared["background_url"] is None
+    assert list(tmp_path.iterdir()) == []

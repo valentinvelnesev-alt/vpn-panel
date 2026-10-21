@@ -19,6 +19,10 @@ SUBSCRIPTION_REDIRECT_ENABLED: Final = "subscription_redirect_enabled"
 BRAND_NAME: Final = "brand_name"
 BRAND_LOGO_URL: Final = "brand_logo_url"
 HIDE_POWERED_BY: Final = "hide_powered_by"
+# Оформление панели: цвет акцента (ключ из готового набора) и своя
+# картинка фона (имя файла в uploads).
+THEME_ACCENT: Final = "theme_accent"
+THEME_BACKGROUND: Final = "theme_background"
 
 PLATEGA_ENABLED: Final = "payment_platega_enabled"
 PLATEGA_MERCHANT_ID: Final = "payment_platega_merchant_id"

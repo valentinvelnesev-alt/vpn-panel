@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { Download } from 'lucide-react'
 import { BarChart } from '@/components/BarChart'
 import { Button, Card } from '@/components/ui'
@@ -18,14 +19,18 @@ export default function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <a href={panel.exportPaymentsCsvUrl} download>
-          <Button variant="ghost">
-            <Download className="size-4" />
-            Экспорт платежей CSV
-          </Button>
-        </a>
-      </div>
+      <PageHeader
+        title="Аналитика"
+        description="Выручка, новые клиенты и конверсия за последние 30 дней."
+        actions={
+          <a href={panel.exportPaymentsCsvUrl} download>
+            <Button variant="ghost">
+              <Download className="size-4" />
+              Экспорт платежей CSV
+            </Button>
+          </a>
+        }
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

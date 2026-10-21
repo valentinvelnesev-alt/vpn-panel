@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { ImagePlus, Send, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
@@ -177,6 +178,10 @@ export default function Broadcasts() {
 
   return (
     <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Рассылки"
+        description="Сообщение всем клиентам бота или выбранной группе: текст, фото и кнопки."
+      />
 
       <Card>
         <h2 className="font-medium">Новая рассылка</h2>
@@ -354,7 +359,7 @@ export default function Broadcasts() {
               variant="ghost"
               onClick={() => testSend.mutate()}
               disabled={testSend.isPending || !text || tooLong}
-              title="Придёт администраторам бота (Бот → Администраторы бота)"
+              title="Придёт администраторам бота (Бот → Уведомления и админы)"
             >
               {testSend.isPending ? 'Отправляю…' : 'Отправить тест себе'}
             </Button>

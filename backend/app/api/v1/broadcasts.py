@@ -233,7 +233,7 @@ async def test_broadcast(
     if not row.admin_telegram_ids:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Укажите свой Telegram ID в «Бот → Администраторы бота» — туда придёт тест",
+            "Укажите свой Telegram ID в «Бот → Уведомления и админы» — туда придёт тест",
         )
     token = decrypt(row.token_encrypted)
     buttons = [b.model_dump() for b in data.buttons]

@@ -62,6 +62,8 @@ export interface BackupFile {
   name: string
   size_bytes: number
   created_at: string
+  /** База + картинки + ключ шифрования; false — старая копия, только база. */
+  full: boolean
 }
 
 export interface BackupSchedule {
@@ -117,6 +119,13 @@ export interface ImportReport {
 export interface PublicBrand {
   title: string
   logo_url: string | null
+  accent: string
+  background_url: string | null
+}
+
+export interface ThemeSettings {
+  accent: string
+  background_url: string | null
 }
 
 export interface BrandSettings {
@@ -551,6 +560,8 @@ export const panel = {
     return api<BotStatus>('/bot/menu-photo', { method: 'PUT', body: form })
   },
   deleteMenuPhoto: () => api<BotStatus>('/bot/menu-photo', { method: 'DELETE' }),
+  saveNodeAlerts: (json: { enabled: boolean; chat_id: number | null }) =>
+    api<BotStatus>('/bot/node-alerts', { method: 'PUT', json }),
 
   saveBotSettings: (json: BotSettings) =>
     api<BotStatus>('/bot/settings', { method: 'PUT', json }),
@@ -715,6 +726,14 @@ export const panel = {
 
   publicBrand: () => api<PublicBrand>('/settings/brand/public'),
   brand: () => api<BrandSettings>('/settings/brand'),
+  saveTheme: (accent: string) =>
+    api<ThemeSettings>('/settings/theme', { method: 'PUT', json: { accent } }),
+  setBackground: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api<ThemeSettings>('/settings/theme/background', { method: 'PUT', body: form })
+  },
+  deleteBackground: () => api<ThemeSettings>('/settings/theme/background', { method: 'DELETE' }),
   saveBrand: (json: BrandSettings) =>
     api<BrandSettings>('/settings/brand', { method: 'PUT', json }),
 

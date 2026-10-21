@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import {
   Activity,
   AlertTriangle,
@@ -161,6 +162,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4">
+      <PageHeader title="Главная" description="Выручка, подписки и состояние нод — одним взглядом." />
       {!data.configured && (
         <Card>
           <h2 className="font-medium">Подключите {terms.name}</h2>

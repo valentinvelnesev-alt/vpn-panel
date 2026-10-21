@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { Ban, CircleSlash, Clock, Search, UserCheck, Users as UsersIcon } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Button, Card, Input } from '@/components/ui'
@@ -70,6 +71,10 @@ export default function Users() {
 
   return (
     <div className="space-y-4">
+      <PageHeader
+        title="Пользователи"
+        description="Все аккаунты VPN: поиск, продление, устройства, блокировка."
+      />
       {counts && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <CountCard

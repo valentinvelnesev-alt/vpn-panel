@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+import { useBrand } from '@/lib/brand'
+import { ACCENTS, DEFAULT_ACCENT, isAccent } from '@/lib/theme'
 
 /**
  * Живой фон: медленно дрейфующие светящиеся частицы, соединённые линиями,
@@ -21,7 +23,7 @@ interface Particle {
   radius: number
 }
 
-export default function AuroraBackground() {
+function Particles({ accent: accentKey }: { accent: string | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -58,10 +60,9 @@ export default function AuroraBackground() {
     resize()
     seed()
 
-    // Цвет берём из темы, чтобы фон менялся вместе с ней.
-    const accent = getComputedStyle(document.documentElement)
-      .getPropertyValue('--color-accent')
-      .trim()
+    // Цвет — из выбранного акцента (а не из CSS: эффект дочернего компонента
+    // срабатывает раньше, чем родитель успевает применить новый цвет).
+    const accent = ACCENTS[isAccent(accentKey) ? accentKey : DEFAULT_ACCENT].value
 
     const draw = () => {
       ctx.clearRect(0, 0, width, height)
@@ -167,7 +168,7 @@ export default function AuroraBackground() {
       window.removeEventListener('resize', onResize)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [])
+  }, [accentKey])
 
   return (
     <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
@@ -177,4 +178,24 @@ export default function AuroraBackground() {
       <canvas ref={canvasRef} className="size-full" />
     </div>
   )
+}
+
+/**
+ * Фон панели: своя картинка из «Настройки → Оформление» (затемнённая, чтобы
+ * текст оставался читаемым) или живые частицы в цвет акцента.
+ */
+export default function AuroraBackground() {
+  const { accent, background } = useBrand()
+  if (background) {
+    return (
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div
+          className="absolute inset-0 bg-cover bg-center"
+          style={{ backgroundImage: `url("${background}")` }}
+        />
+        <div className="absolute inset-0 bg-bg/75" />
+      </div>
+    )
+  }
+  return <Particles accent={accent} />
 }

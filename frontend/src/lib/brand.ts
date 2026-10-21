@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { panel } from '@/lib/api'
+import { applyAccent } from '@/lib/theme'
 
 export const DEFAULT_TITLE = 'Panel'
 
@@ -18,6 +19,12 @@ export function useBrand() {
   })
   const title = data?.title || DEFAULT_TITLE
   const logo = data?.logo_url || null
+  const accent = data?.accent ?? null
+  const background = data?.background_url || null
+
+  useEffect(() => {
+    applyAccent(accent)
+  }, [accent])
 
   useEffect(() => {
     document.title = title
@@ -34,5 +41,5 @@ export function useBrand() {
     link.href = logo
   }, [logo])
 
-  return { title, logo }
+  return { title, logo, accent, background }
 }

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { Power, RotateCw } from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { panel, type Node } from '@/lib/api'
@@ -43,12 +44,15 @@ export default function Nodes() {
 
   return (
     <div className="space-y-6">
-      {/* Заголовок раздела не дублируем — он уже подсвечен в навигации. */}
-      <div className="flex justify-end">
-        <span className="text-sm text-muted">
-          {nodes.filter((n) => n.online).length} из {nodes.length} на связи
-        </span>
-      </div>
+      <PageHeader
+        title="Ноды"
+        description="Серверы VPN: на связи ли, сколько людей и трафика. Здесь же — включить, выключить и перезапустить."
+        actions={
+          <span className="text-sm text-muted">
+            {nodes.filter((n) => n.online).length} из {nodes.length} на связи
+          </span>
+        }
+      />
 
       {action.isError && (
         <p className="text-sm text-danger">{(action.error as Error).message}</p>

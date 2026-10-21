@@ -96,8 +96,8 @@ def test_restore_makes_safety_copy_first(client, backup_dir, monkeypatch) -> Non
         _make(backup_dir, name)
         return next(f for f in svc.list_files() if f.name == name)
 
-    async def fake_psql(path: str) -> None:
-        steps.append(f"restore:{os.path.basename(path)}")
+    async def fake_psql(dump) -> None:
+        steps.append(f"restore:{dump.read().decode()}")
 
     async def fake_alembic() -> None:
         steps.append("alembic")
@@ -110,8 +110,126 @@ def test_restore_makes_safety_copy_first(client, backup_dir, monkeypatch) -> Non
         "/api/v1/backups/backup_20260101_000000.sql.gz/restore", json={"confirm": "восстановить"}
     )
     assert r.status_code == 200, r.text
-    assert steps == ["backup:before_restore", "restore:backup_20260101_000000.sql.gz", "alembic"]
-    assert r.json()["safety_backup"].endswith("_before_restore.sql.gz")
+    assert steps == ["backup:before_restore", "restore:-- dump", "alembic"]
+    assert r.json()["safety_backup"].endswith("_before_restore.tar.gz")
+
+
+# ── Полная копия: база + картинки + ключ ──────────────────────────────
+@pytest.fixture
+def uploads(tmp_path, monkeypatch):
+    directory = tmp_path / "uploads"
+    directory.mkdir()
+    monkeypatch.setattr(settings, "upload_dir", str(directory))
+    return directory
+
+
+@pytest.fixture
+def fake_pg(monkeypatch):
+    """pg_dump пишет фиксированный дамп, psql запоминает, что ему дали."""
+    restored: list[bytes] = []
+
+    async def fake_dump(target: str) -> None:
+        with open(target, "wb") as f:
+            f.write(b"-- full dump")
+
+    async def fake_psql(dump) -> None:
+        restored.append(dump.read())
+
+    async def fake_alembic() -> None:
+        return None
+
+    monkeypatch.setattr(svc, "_pg_dump", fake_dump)
+    monkeypatch.setattr(svc, "_psql_restore", fake_psql)
+    monkeypatch.setattr(svc, "_alembic_upgrade", fake_alembic)
+    return restored
+
+
+async def test_full_backup_contains_db_pictures_and_key(backup_dir, uploads, fake_pg) -> None:
+    import json
+    import tarfile
+
+    (uploads / "menu-abc.jpg").write_bytes(b"jpeg")
+    (uploads / "..hidden").write_bytes(b"x")  # не наш файл — не берём
+    created = await svc.create()
+    assert created.full and created.name.endswith(".tar.gz")
+    with tarfile.open(backup_dir / created.name) as tar:
+        names = set(tar.getnames())
+        assert {"database.sql", "meta.json", "uploads/menu-abc.jpg"} <= names
+        assert "uploads/..hidden" not in names
+        meta = json.loads(tar.extractfile("meta.json").read())
+    assert meta["encryption_key"] == settings.encryption_key
+
+
+async def test_restore_on_new_server_brings_pictures_and_reencrypts(
+    backup_dir, uploads, fake_pg, monkeypatch
+) -> None:
+    (uploads / "menu-abc.jpg").write_bytes(b"jpeg")
+    created = await svc.create()
+    # «Новый сервер»: картинок нет, ключ шифрования другой.
+    (uploads / "menu-abc.jpg").unlink()
+    old_key = settings.encryption_key
+    calls: list[str] = []
+
+    async def fake_reencrypt(key: str) -> int:
+        calls.append(key)
+        return 3
+
+    monkeypatch.setattr(svc, "reencrypt", fake_reencrypt)
+    monkeypatch.setattr(settings, "encryption_key", "another-key")
+
+    result = await svc.restore(created.name)
+    assert fake_pg == [b"-- full dump"]
+    assert (uploads / "menu-abc.jpg").read_bytes() == b"jpeg"
+    assert result.uploads == 1
+    assert calls == [old_key] and result.reencrypted == 3
+
+
+async def test_same_server_restore_does_not_reencrypt(backup_dir, uploads, fake_pg, monkeypatch) -> None:
+    created = await svc.create()
+
+    async def boom(key: str) -> int:
+        raise AssertionError("тот же ключ — перешифровывать нечего")
+
+    monkeypatch.setattr(svc, "reencrypt", boom)
+    assert (await svc.restore(created.name)).reencrypted == 0
+
+
+async def test_reencrypt_moves_secrets_to_current_key(monkeypatch) -> None:
+    from cryptography.fernet import Fernet
+
+    import shared.crypto as crypto
+    from app.db.session import SessionLocal
+    from shared.db.models import BotConfig, Setting
+
+    old_key = Fernet.generate_key().decode()
+    old = Fernet(old_key.encode())
+    async with SessionLocal() as db:
+        db.add(Setting(key="payment_platega_secret", value=old.encrypt(b"s3cret").decode(), is_secret=True))
+        db.add(Setting(key="brand_name", value="plain", is_secret=False))
+        db.add(BotConfig(id=1, token_encrypted=old.encrypt(b"1:TOKEN").decode()))
+        await db.commit()
+
+    assert await svc.reencrypt(old_key) == 2
+    async with SessionLocal() as db:
+        secret = await db.get(Setting, "payment_platega_secret")
+        bot = await db.get(BotConfig, 1)
+        assert crypto.decrypt(secret.value) == "s3cret"
+        assert crypto.decrypt(bot.token_encrypted) == "1:TOKEN"
+        assert (await db.get(Setting, "brand_name")).value == "plain"
+    # Повторный запуск ничего не ломает: всё уже под текущим ключом.
+    assert await svc.reencrypt(old_key) == 0
+
+
+def test_upload_full_archive_keeps_format(client, uploads, fake_pg) -> None:
+    import asyncio
+
+    created = asyncio.run(svc.create())
+    with open(svc.path_of(created.name), "rb") as f:
+        data = f.read()
+    r = client.post("/api/v1/backups/upload", files={"file": ("copy.tar.gz", data)})
+    assert r.status_code == 201
+    assert r.json()["name"].endswith("_upload.tar.gz")
+    assert r.json()["full"] is True
 
 
 # ── Расписание ────────────────────────────────────────────────────────

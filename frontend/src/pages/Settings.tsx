@@ -1,57 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  CheckCircle2,
-  LogOut,
-  PanelLeft,
-  PanelTop,
-  ShieldCheck,
-  XCircle,
-} from 'lucide-react'
+import { CheckCircle2, ImageOff, ImagePlus, LogOut, ShieldCheck, XCircle } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
+import { PageHeader } from '@/components/page'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { auth, panel } from '@/lib/api'
-import { DEFAULT_TITLE } from '@/lib/brand'
+import { DEFAULT_TITLE, useBrand } from '@/lib/brand'
 import { cn } from '@/lib/cn'
-import { setNavStyle, useNavStyle, type NavStyle } from '@/lib/navStyle'
 import { usePanelTerms } from '@/lib/panelKind'
-import { BackupsCard } from './SettingsBackups'
-
-function AppearanceCard() {
-  const current = useNavStyle()
-
-  const options: { value: NavStyle; label: string; icon: typeof PanelTop }[] = [
-    { value: 'compact', label: 'Компактный', icon: PanelTop },
-    { value: 'sidebar', label: 'Боковая панель', icon: PanelLeft },
-  ]
-
-  return (
-    <Card>
-      <h2 className="font-medium">Стиль оформления</h2>
-      <p className="mt-1 text-sm text-muted">
-        Выберите способ навигации по интерфейсу панели.
-      </p>
-
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        {options.map(({ value, label, icon: Icon }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setNavStyle(value)}
-            className={cn(
-              'flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm transition-all',
-              current === value
-                ? 'border-accent/60 bg-accent/10 font-medium text-accent'
-                : 'border-border/60 text-muted hover:bg-surface-hover hover:text-fg',
-            )}
-          >
-            <Icon className="size-4" />
-            {label}
-          </button>
-        ))}
-      </div>
-    </Card>
-  )
-}
+import { ACCENTS, applyAccent, DEFAULT_ACCENT, type Accent } from '@/lib/theme'
 
 function BrandCard() {
   const queryClient = useQueryClient()
@@ -453,7 +409,7 @@ function ImportCard() {
   )
 }
 
-export default function Settings() {
+export default function SettingsConnection() {
   const terms = usePanelTerms()
   const queryClient = useQueryClient()
   const { data: current } = useQuery({
@@ -497,18 +453,11 @@ export default function Settings() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
-
-      <SecurityCard />
-
-      <BrandCard />
-
-      <BackupsCard />
-
-      <ImportCard />
-
-      <AppearanceCard />
-
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title={`Подключение к ${terms.name}`}
+        description="Откуда панель и бот берут ноды, пользователей и ключи."
+      />
       <Card>
         <h2 className="font-medium">Подключение к {terms.name}</h2>
         <p className="mt-1 text-sm text-muted">
@@ -624,6 +573,149 @@ export default function Settings() {
           </div>
         </form>
       </Card>
+    </div>
+  )
+}
+
+function ThemeCard() {
+  const queryClient = useQueryClient()
+  const { accent, background } = useBrand()
+  const current: Accent = (accent && accent in ACCENTS ? accent : DEFAULT_ACCENT) as Accent
+  const [error, setError] = useState<string | null>(null)
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['brand-public'] })
+
+  const saveAccent = useMutation({
+    mutationFn: (value: Accent) => panel.saveTheme(value),
+    onMutate: (value) => applyAccent(value),
+    onSuccess: refresh,
+    onError: (e: Error) => {
+      applyAccent(current)
+      setError(e.message)
+    },
+  })
+  const upload = useMutation({
+    mutationFn: (file: File) => panel.setBackground(file),
+    onSuccess: refresh,
+    onError: (e: Error) => setError(e.message),
+  })
+  const remove = useMutation({ mutationFn: panel.deleteBackground, onSuccess: refresh })
+
+  return (
+    <Card className="space-y-5">
+      <div>
+        <h2 className="font-medium">Цвет и фон</h2>
+        <p className="mt-1 text-sm text-muted">
+          Видят все администраторы панели, в том числе на странице входа. Применяется сразу.
+        </p>
+      </div>
+
+      <div>
+        <span className="text-sm font-medium">Цвет кнопок и акцентов</span>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(Object.keys(ACCENTS) as Accent[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setError(null)
+                saveAccent.mutate(key)
+              }}
+              className={cn(
+                'flex items-center gap-2 rounded-full border py-1.5 pl-1.5 pr-3 text-sm transition-all',
+                current === key
+                  ? 'border-fg/60 bg-surface-hover'
+                  : 'border-border/60 hover:bg-surface-hover',
+              )}
+            >
+              <span
+                className="size-6 rounded-full shadow-inner"
+                style={{ background: ACCENTS[key].value }}
+              />
+              {ACCENTS[key].label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <span className="text-sm font-medium">Фон панели</span>
+        <p className="mt-1 text-xs text-muted">
+          Своя картинка вместо анимированного фона — её немного затемняем, чтобы текст читался.
+          JPEG, PNG или WebP до 8 МБ.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {background ? (
+            <img
+              src={background}
+              alt="Фон панели"
+              className="h-20 w-32 rounded-2xl border object-cover"
+            />
+          ) : (
+            <span className="grid h-20 w-32 place-items-center rounded-2xl border border-dashed text-xs text-muted">
+              Анимированный
+            </span>
+          )}
+          <label className="cursor-pointer">
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (!file) return
+                setError(null)
+                upload.mutate(file)
+              }}
+            />
+            <span className="inline-flex h-10 items-center gap-2 rounded-full border border-border/60 bg-surface/40 px-5 text-sm font-medium hover:bg-surface-hover">
+              <ImagePlus className="size-4" />
+              {upload.isPending ? 'Загружаю…' : background ? 'Заменить' : 'Загрузить картинку'}
+            </span>
+          </label>
+          {background && (
+            <Button variant="ghost" onClick={() => remove.mutate()} disabled={remove.isPending}>
+              <ImageOff className="size-4" />
+              Вернуть анимированный
+            </Button>
+          )}
+        </div>
+      </div>
+      {error && <p className="text-sm text-danger">{error}</p>}
+    </Card>
+  )
+}
+
+export function SettingsAppearance() {
+  return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Оформление" description="Название, логотип, цвет и фон панели." />
+      <ThemeCard />
+      <BrandCard />
+    </div>
+  )
+}
+
+export function SettingsSecurity() {
+  return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Безопасность"
+        description="Пароль, двухфакторная аутентификация и активные сессии."
+      />
+      <SecurityCard />
+    </div>
+  )
+}
+
+export function SettingsImport() {
+  return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Перенос из другого бота"
+        description="Клиенты, балансы, рефералы и ключи из Bedolaga или STEALTHNET."
+      />
+      <ImportCard />
     </div>
   )
 }

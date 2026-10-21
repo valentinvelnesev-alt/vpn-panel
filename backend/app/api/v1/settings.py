@@ -1,9 +1,13 @@
+import os
+import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.api.deps import CurrentAdmin, DbSession
+from app.core.config import settings
 from shared.db.models import AuditLog
 from app.core.security import mask
 from app.services import remnawave_provider
@@ -123,9 +127,20 @@ async def check_remnawave(
 DEFAULT_TITLE = "Panel"
 
 
+Accent = Literal["blue", "cyan", "violet", "green", "orange", "pink"]
+DEFAULT_ACCENT = "blue"
+
+
 class PublicBrandOut(BaseModel):
     title: str
     logo_url: str | None
+    # Тема нужна и странице входа, поэтому отдаётся без авторизации.
+    accent: str = DEFAULT_ACCENT
+    background_url: str | None = None
+
+
+def _background_url(name: str | None) -> str | None:
+    return f"/uploads/{name}" if name else None
 
 
 @router.get("/brand/public", response_model=PublicBrandOut)
@@ -133,11 +148,102 @@ async def get_public_brand(db: DbSession) -> PublicBrandOut:
     """Без авторизации: нужно странице входа для <title> и шапки. Отдаёт
     только то, что админ сам задал показывать, — по умолчанию нейтральное
     «Panel», а не «VPN Panel», чтобы вкладка не выдавала, что это за сервис."""
-    values = await cfg.get_many(db, cfg.BRAND_NAME, cfg.BRAND_LOGO_URL)
+    values = await cfg.get_many(
+        db, cfg.BRAND_NAME, cfg.BRAND_LOGO_URL, cfg.THEME_ACCENT, cfg.THEME_BACKGROUND
+    )
     return PublicBrandOut(
         title=(values[cfg.BRAND_NAME] or "").strip() or DEFAULT_TITLE,
         logo_url=values[cfg.BRAND_LOGO_URL] or None,
+        accent=values[cfg.THEME_ACCENT] or DEFAULT_ACCENT,
+        background_url=_background_url(values[cfg.THEME_BACKGROUND]),
     )
+
+
+# ── Оформление: акцент и фон ──────────────────────────────────────────
+class ThemeIn(BaseModel):
+    accent: Accent
+
+
+class ThemeOut(BaseModel):
+    accent: str
+    background_url: str | None
+
+
+async def _theme(db) -> ThemeOut:
+    values = await cfg.get_many(db, cfg.THEME_ACCENT, cfg.THEME_BACKGROUND)
+    return ThemeOut(
+        accent=values[cfg.THEME_ACCENT] or DEFAULT_ACCENT,
+        background_url=_background_url(values[cfg.THEME_BACKGROUND]),
+    )
+
+
+def _audit_theme(db, admin, request: Request, action: str) -> None:
+    db.add(
+        AuditLog(
+            admin_id=admin.id,
+            action=action,
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+
+@router.put("/theme", response_model=ThemeOut)
+async def save_theme(
+    data: ThemeIn, admin: CurrentAdmin, db: DbSession, request: Request
+) -> ThemeOut:
+    await cfg.set_(db, cfg.THEME_ACCENT, data.accent)
+    _audit_theme(db, admin, request, "settings.theme")
+    return await _theme(db)
+
+
+BACKGROUND_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_BACKGROUND_BYTES = 8 * 1024 * 1024
+
+
+def _drop_upload(name: str | None) -> None:
+    if not name:
+        return
+    try:
+        os.remove(os.path.join(settings.upload_dir, os.path.basename(name)))
+    except OSError:
+        pass
+
+
+@router.put("/theme/background", response_model=ThemeOut)
+async def set_background(
+    file: UploadFile, admin: CurrentAdmin, db: DbSession, request: Request
+) -> ThemeOut:
+    """Своя картинка фона панели. Лежит в uploads — попадает в резервную
+    копию вместе с картинками бота."""
+    ext = BACKGROUND_TYPES.get(file.content_type or "")
+    if ext is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Поддерживаются только JPEG, PNG и WebP"
+        )
+    body = await file.read(MAX_BACKGROUND_BYTES + 1)
+    if len(body) > MAX_BACKGROUND_BYTES:
+        raise HTTPException(413, "Картинка больше 8 МБ")
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    name = f"bg-{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(settings.upload_dir, name), "wb") as f:
+        f.write(body)
+    previous = await cfg.get(db, cfg.THEME_BACKGROUND)
+    await cfg.set_(db, cfg.THEME_BACKGROUND, name)
+    _audit_theme(db, admin, request, "settings.theme.background")
+    await db.commit()
+    _drop_upload(previous)
+    return await _theme(db)
+
+
+@router.delete("/theme/background", response_model=ThemeOut)
+async def delete_background(admin: CurrentAdmin, db: DbSession, request: Request) -> ThemeOut:
+    previous = await cfg.get(db, cfg.THEME_BACKGROUND)
+    await cfg.set_(db, cfg.THEME_BACKGROUND, None)
+    _audit_theme(db, admin, request, "settings.theme.background")
+    await db.commit()
+    _drop_upload(previous)
+    return await _theme(db)
 
 
 class BrandOut(BaseModel):

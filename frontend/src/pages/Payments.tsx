@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { useEffect, useState } from 'react'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type Providers } from '@/lib/api'
@@ -362,6 +363,10 @@ export default function Payments() {
 
   return (
     <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Платежи"
+        description="Способы оплаты в боте и журнал всех оплат. Включённый способ сразу появляется у клиентов."
+      />
       <PlategaCard providers={providers} />
       <RollyPayCard providers={providers} />
       <CryptoBotCard providers={providers} />

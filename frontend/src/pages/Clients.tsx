@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PageHeader } from '@/components/page'
 import { Ban, Contact, Plus, Search, Star, Trash2, Wallet } from 'lucide-react'
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
@@ -447,12 +448,10 @@ export default function Clients() {
 
   return (
     <div className="max-w-5xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Клиенты бота</h1>
-        <p className="mt-1 text-sm text-muted">
-          Люди из Telegram-бота: баланс, подписки, персональные тарифы.
-        </p>
-      </div>
+      <PageHeader
+        title="Клиенты бота"
+        description="Люди из Telegram-бота: баланс, подписки, персональные тарифы, бан."
+      />
 
       <form
         className="flex gap-2"

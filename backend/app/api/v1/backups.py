@@ -25,6 +25,8 @@ class BackupFileOut(BaseModel):
     name: str
     size_bytes: int
     created_at: datetime
+    # Полная копия (база + картинки + ключ) или старая — только база.
+    full: bool = True
 
 
 class ScheduleOut(BaseModel):
@@ -53,10 +55,14 @@ class RestoreOut(BaseModel):
     ok: bool
     message: str
     safety_backup: str
+    uploads: int = 0
+    reencrypted: int = 0
 
 
 def _out(f: svc.BackupFile) -> BackupFileOut:
-    return BackupFileOut(name=f.name, size_bytes=f.size_bytes, created_at=f.created_at)
+    return BackupFileOut(
+        name=f.name, size_bytes=f.size_bytes, created_at=f.created_at, full=f.full
+    )
 
 
 def _audit(db, admin, action: str, request: Request, target: str | None = None) -> None:
@@ -135,11 +141,10 @@ async def upload_backup(
     file: UploadFile, admin: CurrentAdmin, db: DbSession, request: Request
 ) -> BackupFileOut:
     """Копия с другого сервера — после загрузки её можно восстановить."""
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(data) > MAX_UPLOAD_BYTES:
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Файл больше 512 МБ")
     try:
-        saved = svc.save_upload(data)
+        saved = svc.save_upload(file.file)
     except svc.BackupError as exc:
         raise _fail(exc) from exc
     _audit(db, admin, "backups.upload", request, saved.name)
@@ -160,16 +165,34 @@ async def restore_backup(
     # Своя сессия запроса держала бы соединение во время DROP TABLE.
     await db.commit()
     try:
-        safety = await svc.restore(name)
+        result = await svc.restore(name)
     except svc.BackupError as exc:
         raise _fail(exc) from exc
-    # После восстановления в базе другая история — журнал пишем уже в неё.
-    _audit(db, admin, "backups.restore", request, name)
+    # После восстановления в базе другая история и, возможно, другие админы —
+    # запись журнала без ссылки на админа, иначе её мог бы отвергнуть FK.
+    db.add(
+        AuditLog(
+            admin_id=None,
+            action="backups.restore",
+            target=name,
+            details={"login": admin.login},
+            ip=request.client.host if request.client else None,
+            created_at=datetime.now(UTC),
+        )
+    )
     # Тарифы, токен и настройки бота могли смениться.
     await bus.publish(bus.CMD_START)
+    details = []
+    if result.uploads:
+        details.append(f"картинок: {result.uploads}")
+    if result.reencrypted:
+        details.append(f"ключи бота и платёжек перенесены под этот сервер ({result.reencrypted})")
     return RestoreOut(
         ok=True,
-        message=f"База восстановлена из {name}. Состояние до восстановления сохранено в "
-        f"{safety.name}. Войдите в панель заново, если сессия прервётся.",
-        safety_backup=safety.name,
+        message=f"Готово, всё восстановлено{': ' + ', '.join(details) if details else ''}. "
+        f"Состояние до восстановления сохранено копией {result.safety.name}. "
+        "Если панель попросит войти — войдите с логином и паролем из копии.",
+        safety_backup=result.safety.name,
+        uploads=result.uploads,
+        reencrypted=result.reencrypted,
     )

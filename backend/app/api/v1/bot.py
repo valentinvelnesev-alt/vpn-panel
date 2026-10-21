@@ -542,7 +542,7 @@ async def set_emoji_mode(
     if not test_chat_id:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Укажите свой Telegram ID в «Администраторы бота» и напишите боту /start — "
+            "Укажите свой Telegram ID в «Бот → Уведомления и админы» и напишите боту /start — "
             "туда придёт проверочное сообщение",
         )
 

@@ -1,16 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { DatabaseBackup, Download, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { PageHeader } from '@/components/page'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type BackupFile, type BackupSchedule } from '@/lib/api'
 import { bytes, dateTime } from '@/lib/format'
 
 const RESTORE_CONFIRM = 'ВОССТАНОВИТЬ'
 
-function kindOf(name: string): string | null {
-  if (name.includes('_before_restore')) return 'перед восстановлением'
-  if (name.includes('_upload')) return 'загружена'
-  return null
+function kindOf(file: BackupFile): string {
+  const parts = [file.full ? 'база и картинки' : 'только база (старый формат)']
+  if (file.name.includes('_before_restore')) parts.push('перед восстановлением')
+  if (file.name.includes('_upload')) parts.push('загружена')
+  return parts.join(' · ')
 }
 
 function RestoreDialog({ file, onDone }: { file: BackupFile; onDone: () => void }) {
@@ -34,9 +36,9 @@ function RestoreDialog({ file, onDone }: { file: BackupFile; onDone: () => void 
   return (
     <div className="space-y-3 rounded-2xl border border-danger/40 p-3 text-sm">
       <p>
-        Вся база панели и бота (клиенты, балансы, тарифы, платежи, настройки) будет заменена
-        содержимым копии от <b>{dateTime(file.created_at)}</b>. Всё, что изменилось после неё,
-        пропадёт. Текущее состояние панель сначала сохранит отдельной копией.
+        Всё в панели и боте — клиенты, балансы, тарифы, кнопки, тексты, платежи, настройки и
+        картинки — станет как в копии от <b>{dateTime(file.created_at)}</b>. Что изменилось
+        после неё, пропадёт. Текущее состояние панель сначала сохранит отдельной копией.
       </p>
       <Field label={`Для подтверждения введите ${RESTORE_CONFIRM}`}>
         <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
@@ -111,7 +113,7 @@ function ScheduleForm({ schedule }: { schedule: BackupSchedule }) {
   )
 }
 
-export function BackupsCard() {
+function BackupsCard() {
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
   const [restoring, setRestoring] = useState<string | null>(null)
@@ -125,11 +127,16 @@ export function BackupsCard() {
 
   return (
     <Card>
-      <h2 className="font-medium">Резервные копии</h2>
+      <h2 className="font-medium">Копии</h2>
       <p className="mt-1 text-sm text-muted">
-        Копия всей базы: клиенты, балансы, тарифы, платежи и настройки. Скачивайте её время от
-        времени к себе — если сервер пропадёт, копия на нём пропадёт вместе с ним. Картинки
-        меню и рассылок в копию не входят.
+        В копии всё, что вы настраивали: клиенты и балансы, тарифы, кнопки и их цвета, тексты,
+        платежи, настройки бота и платёжек, картинки меню, рассылок и фон панели. На новом
+        сервере: установите панель, загрузите сюда файл и нажмите «Восстановить» — всё
+        вернётся как было, токен бота и ключи платёжек тоже.
+      </p>
+      <p className="mt-2 rounded-2xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+        Скачивайте копию к себе: если сервер пропадёт, копии на нём пропадут вместе с ним.
+        Храните файл как пароль — в нём ключи от бота и платёжек.
       </p>
 
       {data && <ScheduleForm schedule={data.schedule} />}
@@ -150,7 +157,7 @@ export function BackupsCard() {
         <input
           ref={fileInput}
           type="file"
-          accept=".gz"
+          accept=".gz,.tar.gz"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0]
@@ -169,8 +176,7 @@ export function BackupsCard() {
               <div className="min-w-0">
                 <p>{dateTime(file.created_at)}</p>
                 <p className="truncate text-xs text-muted">
-                  {bytes(file.size_bytes)}
-                  {kindOf(file.name) && ` · ${kindOf(file.name)}`}
+                  {bytes(file.size_bytes)} · {kindOf(file)}
                 </p>
               </div>
               <div className="flex shrink-0 gap-1">
@@ -208,5 +214,17 @@ export function BackupsCard() {
         ))}
       </div>
     </Card>
+  )
+}
+
+export default function SettingsBackupsPage() {
+  return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader
+        title="Резервные копии"
+        description="Сохраните всё одним файлом и восстановите на этом или новом сервере."
+      />
+      <BackupsCard />
+    </div>
   )
 }
