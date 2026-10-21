@@ -365,12 +365,12 @@ async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
     # Сообщение нужно только как «носитель» клавиатуры: как только она
     # встала, удаляем его — клавиатура у клиента остаётся, а в чате пусто.
     sent = await message.answer(
-        "…", reply_markup=keyboards.bottom_keyboard(config), disable_notification=True
+        "...", reply_markup=keyboards.bottom_keyboard(config), disable_notification=True
     )
     try:
         await sent.delete()
     except TelegramBadRequest:
-        pass  # не удалилось — останется «…», ничего не ломается
+        pass  # не удалилось — останется «...», ничего не ломается
     async with session() as db:
         user = await subs.get_or_create_user(db, message.from_user.id)
         user.keyboard_state = wanted
