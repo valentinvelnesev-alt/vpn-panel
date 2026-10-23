@@ -33,7 +33,7 @@ function TrialEditor({ status }: { status: BotStatus }) {
 
         {form.trial_enabled && (
           <>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Сколько дней">
                 <Input
                   type="number"
@@ -48,6 +48,14 @@ function TrialEditor({ status }: { status: BotStatus }) {
                   min={1}
                   value={form.trial_hwid_limit}
                   onChange={(e) => set('trial_hwid_limit', Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Трафик, ГБ" hint="0 — без ограничения. Например 10: после 10 ГБ доступ встанет.">
+                <Input
+                  type="number"
+                  min={0}
+                  value={form.trial_traffic_gb}
+                  onChange={(e) => set('trial_traffic_gb', Number(e.target.value))}
                 />
               </Field>
             </div>

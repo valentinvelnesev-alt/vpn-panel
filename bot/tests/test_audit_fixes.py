@@ -64,6 +64,7 @@ def make_config(**overrides) -> Config:
         trial_days=3,
         trial_squad_uuids=[],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
     )
     values.update(overrides)
     return Config(**values)

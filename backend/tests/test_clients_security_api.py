@@ -148,7 +148,7 @@ def test_discount_and_menu_settings(client: TestClient) -> None:
         for k in (
             "welcome_text", "support_url", "channel_url", "channel_id",
             "require_channel_sub", "trial_enabled", "trial_days", "trial_squad_uuids",
-            "trial_hwid_limit", "purchase_notify_chat_id", "admin_telegram_ids",
+            "trial_hwid_limit", "trial_traffic_gb", "purchase_notify_chat_id", "admin_telegram_ids",
             "privacy_policy_url", "terms_url",
         )
     }

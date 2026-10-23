@@ -75,6 +75,7 @@ def config(monkeypatch):
         trial_days=3,
         trial_squad_uuids=["squad-trial"],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         plans=[
             PlanView(
                 id=1,

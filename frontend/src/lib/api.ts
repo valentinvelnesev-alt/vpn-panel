@@ -245,6 +245,7 @@ export interface BotSettings {
   trial_days: number
   trial_squad_uuids: string[]
   trial_hwid_limit: number
+  trial_traffic_gb: number
   purchase_notify_chat_id: number | null
   admin_telegram_ids: number[]
   privacy_policy_url: string | null

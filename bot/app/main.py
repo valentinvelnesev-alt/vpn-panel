@@ -30,7 +30,14 @@ async def main() -> None:
     serve = asyncio.create_task(supervisor.serve())
     log.info("Служба бота запущена, слушаю команды панели")
 
-    await stopping.wait()
+    stop_wait = asyncio.create_task(stopping.wait())
+    await asyncio.wait({serve, stop_wait}, return_when=asyncio.FIRST_COMPLETED)
+    if serve.done() and not serve.cancelled():
+        # Цикл команд умер (например, база ещё не мигрирована при первом
+        # запуске): молча жить без него нельзя — пусть Docker перезапустит.
+        log.error("Служба бота остановилась с ошибкой, перезапускаюсь", exc_info=serve.exception())
+        await supervisor.shutdown()
+        raise SystemExit(1)
     log.info("Останавливаюсь…")
 
     serve.cancel()

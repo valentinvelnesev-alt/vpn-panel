@@ -342,6 +342,7 @@ async def grant_trial(db: AsyncSession, config: Config, user: BotUser) -> BotUse
             internal_squad_uuids=config.trial_squad_uuids,
             telegram_id=user.telegram_id,
             hwid_device_limit=config.trial_hwid_limit,
+            traffic_limit_bytes=config.trial_traffic_gb * 1024**3,
             description="Выдано ботом: trial",
         )
     finally:

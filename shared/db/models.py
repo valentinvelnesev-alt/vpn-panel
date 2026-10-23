@@ -182,6 +182,7 @@ class BotConfig(Base, TimestampMixin):
         JSON, default=list, nullable=False
     )
     trial_hwid_limit: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    trial_traffic_gb: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Рекламные ссылки с процентом от покупок — выключены, пока админ не
     # включит их в панели (Бот → внизу страницы).

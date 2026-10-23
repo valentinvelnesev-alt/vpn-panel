@@ -76,6 +76,7 @@ def config(monkeypatch):
         trial_days=3,
         trial_squad_uuids=["squad-trial"],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         referral_enabled=True,
         referral_reward_days=5,
         referral_bonus_days=2,
@@ -355,6 +356,7 @@ async def test_create_external_payment_disabled_provider(db) -> None:
         trial_days=3,
         trial_squad_uuids=[],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
     )
     with pytest.raises(payment_flow.PaymentFlowError):
         await payment_flow.create_external_payment(

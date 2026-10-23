@@ -350,6 +350,7 @@ def _config() -> Config:
         trial_days=3,
         trial_squad_uuids=["1"],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         plans=[
             PlanView(
                 id=1, title="Месяц", days=30, price_kopeks=19900,

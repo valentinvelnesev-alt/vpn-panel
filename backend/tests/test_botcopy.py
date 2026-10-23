@@ -114,7 +114,7 @@ def test_button_labels_saved_with_menu_settings(client: TestClient) -> None:
     status = client.get("/api/v1/bot").json()
     keys = (
         "welcome_text", "support_url", "channel_url", "channel_id", "require_channel_sub",
-        "trial_enabled", "trial_days", "trial_squad_uuids", "trial_hwid_limit",
+        "trial_enabled", "trial_days", "trial_squad_uuids", "trial_hwid_limit", "trial_traffic_gb",
         "purchase_notify_chat_id", "admin_telegram_ids", "privacy_policy_url", "terms_url",
         "allow_multiple_subscriptions", "menu_hidden", "menu_columns", "menu_styles", "menu_mode",
     )

@@ -62,6 +62,7 @@ CONFIG = Config(
     trial_days=3,
     trial_squad_uuids=["s"],
     trial_hwid_limit=3,
+    trial_traffic_gb=0,
     referral_enabled=True,
     plans=PLANS,
     traffic_packages=PACKAGES,

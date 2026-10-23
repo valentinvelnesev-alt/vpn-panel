@@ -125,6 +125,7 @@ def config():
         trial_days=3,
         trial_squad_uuids=["squad-trial"],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         plans=[PLAN],
         remnawave_url="https://rw.example",
         remnawave_token="t",
@@ -263,6 +264,7 @@ async def test_external_payment_not_created_when_provider_unconfigured(db) -> No
         welcome_text=None, support_url=None, channel_url=None, channel_id=None,
         require_channel_sub=False, trial_enabled=True, trial_days=3, trial_squad_uuids=[],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         platega_enabled=True,  # включена, но реквизитов нет — как на сервере
     )
     with pytest.raises(payment_flow.PaymentFlowError):

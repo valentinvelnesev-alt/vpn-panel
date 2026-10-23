@@ -38,6 +38,7 @@ def make_config(enabled: bool = True) -> Config:
         trial_days=3,
         trial_squad_uuids=[],
         trial_hwid_limit=2,
+        trial_traffic_gb=0,
         ad_links_enabled=enabled,
     )
 

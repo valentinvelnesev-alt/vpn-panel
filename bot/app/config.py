@@ -148,6 +148,7 @@ class Config:
     trial_days: int
     trial_squad_uuids: list[str]
     trial_hwid_limit: int
+    trial_traffic_gb: int
 
     referral_enabled: bool = False
     referral_reward_days: int = 3
@@ -403,6 +404,7 @@ async def load(db: AsyncSession) -> Config:
         trial_days=row.trial_days,
         trial_squad_uuids=list(row.trial_squad_uuids or []),
         trial_hwid_limit=row.trial_hwid_limit,
+        trial_traffic_gb=row.trial_traffic_gb,
         referral_enabled=row.referral_enabled,
         referral_reward_days=row.referral_reward_days,
         referral_bonus_days=row.referral_bonus_days,

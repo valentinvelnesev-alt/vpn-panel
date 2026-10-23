@@ -108,6 +108,7 @@ class BotStatusOut(BaseModel):
     trial_days: int
     trial_squad_uuids: list[str]
     trial_hwid_limit: int
+    trial_traffic_gb: int
 
     node_alerts_enabled: bool
     node_alerts_chat_id: int | None
@@ -157,6 +158,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         trial_days=row.trial_days,
         trial_squad_uuids=list(row.trial_squad_uuids or []),
         trial_hwid_limit=row.trial_hwid_limit,
+        trial_traffic_gb=row.trial_traffic_gb,
         node_alerts_enabled=row.node_alerts_enabled,
         node_alerts_chat_id=row.node_alerts_chat_id,
         purchase_notify_chat_id=row.purchase_notify_chat_id,
@@ -379,6 +381,7 @@ class BotSettingsIn(BaseModel):
     trial_days: int = Field(default=3, ge=1, le=365)
     trial_squad_uuids: list[str] = Field(default_factory=list)
     trial_hwid_limit: int = Field(default=3, ge=1, le=100)
+    trial_traffic_gb: int = Field(default=0, ge=0, le=100000)
 
     # Уведомление о каждой продаже в чат/группу (бот должен состоять в ней).
     # Пусто/0 — уведомления отключены.

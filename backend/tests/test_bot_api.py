@@ -180,6 +180,7 @@ def test_settings_roundtrip(client: TestClient) -> None:
         "trial_days": 5,
         "trial_squad_uuids": ["s-1"],
         "trial_hwid_limit": 2,
+        "trial_traffic_gb": 10,
     }
     body = client.put("/api/v1/bot/settings", json=payload).json()
     assert body["trial_days"] == 5
