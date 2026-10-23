@@ -107,22 +107,11 @@ def test_menu_buttons_can_be_hidden(config) -> None:
     assert all(row for row in _menu(cfg).inline_keyboard)  # без пустых рядов
 
 
-async def test_help_command_can_be_hidden(config) -> None:
-    from app.supervisor import Supervisor
-
-    class FakeBot:
-        commands: list[str] = []
-
-        async def set_my_commands(self, commands):
-            FakeBot.commands = [c.command for c in commands]
-
-        async def set_chat_menu_button(self, menu_button):
-            pass
-
-    await Supervisor._apply_menu_button(FakeBot(), config)
-    assert FakeBot.commands == ["menu", "help"]
-    await Supervisor._apply_menu_button(FakeBot(), replace(config, menu_hidden=frozenset({"help"})))
-    assert FakeBot.commands == ["menu"]
+def test_help_button_can_be_hidden(config) -> None:
+    shown = [b.text for row in keyboards.reply_menu(config).keyboard for b in row]
+    assert shown == ["Меню", "Помощь"]
+    hidden = replace(config, menu_hidden=frozenset({"help"}))
+    assert [b.text for row in keyboards.reply_menu(hidden).keyboard for b in row] == ["Меню"]
 
 
 # ── Покупка при уже существующей подписке ─────────────────────────────
@@ -346,6 +335,15 @@ def test_menu_button_colors(config) -> None:
     assert by_data["plans"].style == "danger"
     assert by_data["trial"].style is None  # «none» снимает цвет по умолчанию
     assert by_data["promo"].style is None
+
+
+def test_commands_mode_removes_reply_keyboard(config) -> None:
+    from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+    assert isinstance(keyboards.bottom_keyboard(config), ReplyKeyboardMarkup)
+    assert isinstance(
+        keyboards.bottom_keyboard(replace(config, menu_mode="commands")), ReplyKeyboardRemove
+    )
 
 
 def test_qr_png() -> None:

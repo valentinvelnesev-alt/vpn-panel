@@ -19,7 +19,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.types import (
     CallbackQuery,
-    ReplyKeyboardRemove,
     ChatMemberUpdated,
     ErrorEvent,
     LabeledPrice,
@@ -346,24 +345,35 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         await send_new_screen(message, config, text, markup)
 
 
-async def _remove_legacy_keyboard(message: Message) -> None:
-    """Убирает старую клавиатуру «Меню / Помощь» под полем ввода у давних
-    клиентов — один раз.
+async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
+    """Ставит (или убирает) клавиатуру «Меню / Помощь» под полем ввода —
+    только если у клиента её ещё нет или в панели её поменяли.
 
-    Меню теперь открывается кнопкой меню Telegram, без сообщений в чате. Но
-    у тех, кто пользовался ботом раньше, внизу висит прежняя клавиатура, а
-    убрать её Telegram позволяет только вместе с сообщением: отправляем «...»
-    и сразу удаляем. Новым клиентам не отправляется ничего."""
+    Telegram не разрешает в одном сообщении и inline-кнопки, и клавиатуру
+    под полем ввода, поэтому для неё нужно отдельное сообщение. Раньше оно
+    («🚀 Название») приходило на каждый /start и оставалось в чате; теперь
+    отправляется только когда клавиатуру нужно поставить или сменить и сразу
+    удаляется, а название бота стоит первой строкой в самом меню."""
+    wanted = keyboards.keyboard_state(config)
     async with session() as db:
         user = await subs.get_or_create_user(db, message.from_user.id)
-        if user.keyboard_state in (None, "none"):
-            return
-        user.keyboard_state = "none"
-    sent = await message.answer("...", reply_markup=ReplyKeyboardRemove(), disable_notification=True)
+        current = user.keyboard_state
+    # Клиенту, у которого клавиатуры не было, в режиме «кнопка меню слева»
+    # убирать нечего — сообщение не нужно вовсе.
+    if current == wanted or (current is None and wanted == "none"):
+        return
+    # Сообщение нужно только как «носитель» клавиатуры: как только она
+    # встала, удаляем его — клавиатура у клиента остаётся, а в чате пусто.
+    sent = await message.answer(
+        "...", reply_markup=keyboards.bottom_keyboard(config), disable_notification=True
+    )
     try:
         await sent.delete()
     except TelegramBadRequest:
         pass  # не удалилось — останется «...», ничего не ломается
+    async with session() as db:
+        user = await subs.get_or_create_user(db, message.from_user.id)
+        user.keyboard_state = wanted
 
 
 def referral_code_from_payload(payload: str) -> str:
@@ -412,7 +422,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
         )
         return
 
-    await _remove_legacy_keyboard(message)
+    await _apply_bottom_keyboard(message, config)
     await _show_menu(message, config)
 
 
@@ -430,7 +440,7 @@ async def on_help_button(message: Message, config: Config, state: FSMContext) ->
     if not config.shows("help"):
         # Кнопку скрыли в панели, а у клиента ещё старая клавиатура —
         # показываем меню вместе с уже обновлённой клавиатурой.
-        await _remove_legacy_keyboard(message)
+        await _apply_bottom_keyboard(message, config)
         await _show_menu(message, config)
         return
     if config.support_url:
@@ -1998,6 +2008,9 @@ async def on_block(event: ChatMemberUpdated) -> None:
     async with session() as db:
         user = await subs.get_or_create_user(db, event.from_user.id)
         user.has_stopped_bot = blocked
+        if blocked:
+            # Вернётся — клавиатуры под полем ввода у него уже не будет.
+            user.keyboard_state = None
 
 
 __all__ = ["build_dispatcher", "router", "RemnawaveClient"]
