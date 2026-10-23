@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, or_, select
 from app.api.deps import CurrentAdmin, DbSession
 from app.core.config import settings
 from app.services import telegram
+from app.services.links import normalize_support_link
 from app.services.telegram import TelegramError
 from shared import bus
 from shared.crypto import decrypt, encrypt, mask
@@ -123,6 +124,7 @@ class BotStatusOut(BaseModel):
     menu_columns: int
     menu_styles: dict[str, str]
     menu_mode: str
+    support_mode: str
     discount_percent: int
     discount_until: datetime | None
 
@@ -166,6 +168,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         menu_columns=row.menu_columns or 1,
         menu_styles=dict(row.menu_styles or {}),
         menu_mode=row.menu_mode or "keyboard",
+        support_mode=row.support_mode or "link",
         discount_percent=row.discount_percent or 0,
         discount_until=row.discount_until,
     )
@@ -398,8 +401,14 @@ class BotSettingsIn(BaseModel):
     # Telegram слева от поля (не перекрывает жест «назад»).
     menu_mode: Literal["keyboard", "commands"] = "commands"
 
+    @field_validator("support_url")
+    @classmethod
+    def _support_link(cls, value: str | None) -> str | None:
+        # @username → https://t.me/username: кнопке в боте нужен полный адрес.
+        return normalize_support_link(value)
+
     @field_validator(
-        "support_url", "channel_url", "channel_id", "welcome_text",
+        "channel_url", "channel_id", "welcome_text",
         "privacy_policy_url", "terms_url",
     )
     @classmethod

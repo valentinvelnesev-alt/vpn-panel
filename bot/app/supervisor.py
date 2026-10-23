@@ -16,6 +16,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 
 from app import config as config_module
 from app import telegram_client
+from app.support.runner import SupportRunner
 from shared import bus
 from shared.db.models import BotConfig, BotState
 from shared.db.session import session
@@ -39,6 +40,7 @@ class Supervisor:
         self._lock = asyncio.Lock()
         self._retry_task: asyncio.Task | None = None
         self._failures = 0
+        self._support = SupportRunner()
 
     # ── Состояние в БД ────────────────────────────────────────────────
     async def _set_state(
@@ -72,6 +74,7 @@ class Supervisor:
         async with session() as db:
             config = await config_module.load(db)
 
+        await self._apply_support(config)
         if not config.can_run:
             log.info("Бот выключен или без токена — жду команды из панели")
             await self._set_state(BotState.STOPPED)
@@ -202,6 +205,19 @@ class Supervisor:
                 self._retry_task.cancel()
         self._retry_task = None
 
+    async def _apply_support(self, config: config_module.Config) -> None:
+        """Бот поддержки живёт своей жизнью: сбой в нём не должен ронять
+        бота продаж, а остановка продаж — гасить поддержку."""
+        try:
+            await self._support.apply(config)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось применить настройки бота поддержки")
+
+    async def shutdown(self) -> None:
+        """Полная остановка процесса: и бот продаж, и бот поддержки."""
+        await self.stop()
+        await self._support.stop()
+
     async def stop(self) -> None:
         async with self._lock:
             self._cancel_retry()
@@ -250,6 +266,7 @@ class Supervisor:
             async with session() as db:
                 config = await config_module.load(db)
 
+            await self._apply_support(config)
             if (
                 self.running
                 and self._dispatcher is not None

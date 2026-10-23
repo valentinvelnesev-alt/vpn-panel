@@ -256,9 +256,30 @@ export interface BotSettings {
   menu_mode: 'keyboard' | 'commands'
 }
 
+export interface SupportInfo {
+  mode: 'link' | 'bot'
+  link: string | null
+  token_masked: string | null
+  bot_username: string | null
+  chat_id: number | null
+  admin_ids: number[]
+  welcome_text: string | null
+  state: 'stopped' | 'running' | 'error'
+  state_message: string | null
+  seen_chat: { id: number; title: string | null } | null
+  open_tickets: number
+  total_tickets: number
+}
+
+export interface SupportCheck {
+  ready: boolean
+  items: { key: string; ok: boolean; title: string; hint: string | null }[]
+}
+
 export type ButtonStyle = 'primary' | 'success' | 'danger' | 'none'
 
 export interface BotStatus extends BotSettings {
+  support_mode: 'link' | 'bot'
   /** Картинка над экранами бота: имя файла и ссылка для предпросмотра. */
   menu_photo: string | null
   menu_photo_url: string | null
@@ -563,6 +584,22 @@ export const panel = {
     return api<BotStatus>('/bot/menu-photo', { method: 'PUT', body: form })
   },
   deleteMenuPhoto: () => api<BotStatus>('/bot/menu-photo', { method: 'DELETE' }),
+  support: () => api<SupportInfo>('/bot/support'),
+  saveSupport: (json: {
+    mode: 'link' | 'bot'
+    link: string | null
+    chat_id: number | null
+    admin_ids: number[]
+    welcome_text: string | null
+  }) => api<SupportInfo>('/bot/support', { method: 'PUT', json }),
+  setSupportToken: (token: string) =>
+    api<SupportInfo>('/bot/support/token', { method: 'PUT', json: { token } }),
+  deleteSupportToken: () => api<SupportInfo>('/bot/support/token', { method: 'DELETE' }),
+  checkSupport: () => api<SupportCheck>('/bot/support/check', { method: 'POST' }),
+  testSupport: () =>
+    api<{ ok: boolean; title: string; hint: string | null }>('/bot/support/test', {
+      method: 'POST',
+    }),
   saveNodeAlerts: (json: { enabled: boolean; chat_id: number | null }) =>
     api<BotStatus>('/bot/node-alerts', { method: 'PUT', json }),
 

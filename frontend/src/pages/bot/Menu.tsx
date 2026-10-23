@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { BotPage } from '@/components/BotShell'
 import { SaveBar, SectionTitle, Toggle } from '@/components/page'
 import { Button, Card, Field, Input, Textarea } from '@/components/ui'
@@ -131,7 +132,7 @@ function MenuEditor({ status }: { status: BotStatus }) {
     if (form.menu_hidden.includes(key)) return false
     if (key === 'buy_more') return form.allow_multiple_subscriptions
     if (key === 'channel') return !!form.channel_url
-    if (key === 'support') return !!form.support_url
+    if (key === 'support') return !!form.support_url || status.support_mode === 'bot'
     return true
   }
   const preview = MENU_BUTTONS.filter(([key, , , inMenu]) => inMenu && visible(key))
@@ -298,15 +299,20 @@ function MenuEditor({ status }: { status: BotStatus }) {
       </Card>
 
       <Card className="space-y-4">
-        <SectionTitle hint="Пустое поле — кнопки не будет.">Ссылки</SectionTitle>
+        <SectionTitle
+          hint={
+            <>
+              Пустое поле — кнопки не будет. Поддержка настраивается на{' '}
+              <Link to="/bot/support" className="text-accent hover:underline">
+                отдельной странице
+              </Link>
+              .
+            </>
+          }
+        >
+          Ссылки
+        </SectionTitle>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Поддержка">
-            <Input
-              value={form.support_url ?? ''}
-              onChange={(e) => set('support_url', e.target.value || null)}
-              placeholder="https://t.me/support"
-            />
-          </Field>
           <Field label="Наш канал">
             <Input
               value={form.channel_url ?? ''}

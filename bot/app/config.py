@@ -206,6 +206,13 @@ class Config:
 
     # SOCKS5-прокси до Telegram; None — напрямую.
     proxy: str | None = None
+    # Поддержка через отдельного бота (см. app/support). В режиме "link"
+    # кнопка «Поддержка» ведёт на support_url, в режиме "bot" — на бота.
+    support_mode: str = "link"
+    support_token: str | None = None
+    support_chat_id: int | None = None
+    support_admin_ids: list[int] = field(default_factory=list)
+    support_welcome: str | None = None
     # @username бота — для ссылки «вернуться в бот» со страницы оплаты.
     bot_username: str | None = None
 
@@ -361,7 +368,16 @@ async def load(db: AsyncSession) -> Config:
         premium_emoji=row.premium_emoji or {},
         brand=(row.bot_name or "VPN"),
         welcome_text=row.welcome_text,
-        support_url=row.support_url,
+        support_url=(
+            f"https://t.me/{row.support_bot_username}"
+            if row.support_mode == "bot" and row.support_bot_username and row.support_token_encrypted
+            else row.support_url
+        ),
+        support_mode=row.support_mode or "link",
+        support_token=decrypt(row.support_token_encrypted) if row.support_token_encrypted else None,
+        support_chat_id=row.support_chat_id,
+        support_admin_ids=list(row.support_admin_ids or []),
+        support_welcome=row.support_welcome,
         channel_url=row.channel_url,
         channel_id=row.channel_id,
         require_channel_sub=row.require_channel_sub,

@@ -38,7 +38,7 @@ async def main() -> None:
         await serve
     except asyncio.CancelledError:
         pass
-    await supervisor.stop()
+    await supervisor.shutdown()
 
 
 if __name__ == "__main__":

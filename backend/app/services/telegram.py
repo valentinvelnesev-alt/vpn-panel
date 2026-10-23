@@ -214,3 +214,16 @@ async def send_broadcast_test(
 
 async def send_message(token: str, chat_id: int, text: str) -> None:
     await _call(token, "sendMessage", chat_id=chat_id, text=text, parse_mode="HTML")
+
+
+async def get_chat(token: str, chat_id: int) -> dict:
+    return await _call(token, "getChat", chat_id=chat_id)
+
+
+async def get_chat_member(token: str, chat_id: int, user_id: int) -> dict:
+    return await _call(token, "getChatMember", chat_id=chat_id, user_id=user_id)
+
+
+async def send_plain(token: str, chat_id: int, text: str) -> None:
+    """Сообщение без разметки — текст приходит от пользователя панели."""
+    await _call(token, "sendMessage", chat_id=chat_id, text=text)

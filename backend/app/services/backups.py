@@ -450,7 +450,7 @@ async def reencrypt(old_key: str) -> int:
                 row.value = new
                 changed += 1
         for row in await db.scalars(select(BotConfig)):
-            for field in ("token_encrypted", "proxy_encrypted"):
+            for field in ("token_encrypted", "proxy_encrypted", "support_token_encrypted"):
                 if (new := convert(getattr(row, field))) is not None:
                     setattr(row, field, new)
                     changed += 1

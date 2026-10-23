@@ -11,6 +11,7 @@ import {
   Gift,
   LayoutDashboard,
   LayoutList,
+  LifeBuoy,
   Link2,
   LogOut,
   Menu,
@@ -88,6 +89,7 @@ function useNav(): Group[] {
           children: [
             { to: '/bot', label: 'Подключение', icon: Plug, end: true },
             { to: '/bot/menu', label: 'Меню и тексты', icon: LayoutList },
+            { to: '/bot/support', label: 'Поддержка', icon: LifeBuoy },
             { to: '/bot/plans', label: 'Тарифы', icon: Tags },
             { to: '/bot/trial', label: 'Пробный период', icon: Gift },
             { to: '/bot/bonuses', label: 'Промокоды и рефералы', icon: Ticket },

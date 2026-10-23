@@ -272,6 +272,52 @@ class BotConfig(Base, TimestampMixin):
     # «назад» на телефоне).
     menu_mode: Mapped[str] = mapped_column(String(16), default="commands", nullable=False)
 
+    # ── Поддержка ─────────────────────────────────────────────────────
+    # "link" — кнопка «Поддержка» ведёт на @username или ссылку (support_url);
+    # "bot" — отдельный бот поддержки: клиент пишет ему, сообщения попадают
+    # в темы (топики) группы операторов, ответы уходят клиенту обратно.
+    support_mode: Mapped[str] = mapped_column(
+        String(16), default="link", server_default="link", nullable=False
+    )
+    support_token_encrypted: Mapped[str | None] = mapped_column(Text, default=None)
+    support_bot_username: Mapped[str | None] = mapped_column(String(64), default=None)
+    support_bot_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    # Группа операторов с включёнными темами.
+    support_chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    # Кто может отвечать клиентам, кроме администраторов самой группы.
+    support_admin_ids: Mapped[list[int] | None] = mapped_column(JSON, default=list)
+    support_welcome: Mapped[str | None] = mapped_column(Text, default=None)
+    support_state: Mapped[str] = mapped_column(
+        String(16), default="stopped", server_default="stopped", nullable=False
+    )
+    support_state_message: Mapped[str | None] = mapped_column(Text, default=None)
+    # Последняя группа, в которую добавили бота поддержки: панель предлагает
+    # её как «ID группы», чтобы не искать его руками.
+    support_seen_chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    support_seen_chat_title: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
+class SupportTicket(Base):
+    """Обращение в поддержку: одна тема (топик) группы на клиента.
+
+    Закрыли обращение (/close) — тема закрывается, а следующее сообщение
+    клиента заводит новую."""
+
+    __tablename__ = "support_tickets"
+    __table_args__ = (
+        Index("ix_support_tickets_user", "user_telegram_id"),
+        Index("ix_support_tickets_thread", "chat_id", "thread_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64), default=None)
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
 
 class PlanCategory(Base, TimestampMixin):
     """Категория тарифов (например «VPN», «VPN + LTE») — заводится в панели.
