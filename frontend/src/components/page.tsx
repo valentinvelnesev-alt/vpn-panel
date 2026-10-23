@@ -1,7 +1,8 @@
-import { Check, Loader2, RotateCcw } from 'lucide-react'
+import { Check, Loader2, RotateCcw, TriangleAlert } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui'
 import { cn } from '@/lib/cn'
+import type { Applied } from '@/lib/applied'
 import { useUnsavedGuard } from '@/lib/unsaved'
 
 /** Заголовок раздела: название, одна строка пояснения и действия справа. */
@@ -38,7 +39,8 @@ export function SaveBar({
   savedAt,
   onSave,
   onReset,
-  savedNote = 'Сохранено — бот применяет изменения сам, перезапускать его не нужно',
+  savedNote = 'Сохранено',
+  applied,
 }: {
   dirty: boolean
   pending: boolean
@@ -47,6 +49,8 @@ export function SaveBar({
   onSave: () => void
   onReset: () => void
   savedNote?: string
+  /** Подтверждение от бота (lib/applied.ts); без него — просто «Сохранено». */
+  applied?: Applied
 }) {
   useUnsavedGuard(dirty)
   const [showSaved, setShowSaved] = useState(false)
@@ -54,9 +58,13 @@ export function SaveBar({
   useEffect(() => {
     if (!savedAt) return
     setShowSaved(true)
-    const timer = window.setTimeout(() => setShowSaved(false), 4000)
+    // Сообщение о результате держим дольше, чем простое «Сохранено».
+    const timer = window.setTimeout(
+      () => setShowSaved(false),
+      applied?.state === 'stale' ? 12000 : applied?.state === 'applied' ? 7000 : 4000,
+    )
     return () => window.clearTimeout(timer)
-  }, [savedAt])
+  }, [savedAt, applied?.state])
 
   const visible = dirty || pending || !!error || showSaved
 
@@ -92,14 +100,58 @@ export function SaveBar({
               </Button>
             </>
           ) : (
-            <span className="flex flex-1 items-center gap-2 text-sm text-success">
-              <Check className="size-4 shrink-0" />
-              {savedNote}
-            </span>
+            <AppliedNote applied={applied} savedNote={savedNote} />
           )}
         </div>
       </div>
     </>
+  )
+}
+
+function AppliedNote({ applied, savedNote }: { applied?: Applied; savedNote: string }) {
+  if (applied?.state === 'waiting') {
+    return (
+      <span className="flex flex-1 items-center gap-2 text-sm text-muted">
+        <Loader2 className="size-4 shrink-0 animate-spin" />
+        Сохранено, бот применяет настройки…
+      </span>
+    )
+  }
+  if (applied?.state === 'stale') {
+    return (
+      <span className="flex flex-1 items-start gap-2 text-sm text-warning">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+        <span>
+          Сохранено, но бот не подтвердил, что получил настройки. Проверьте, что он запущен
+          («Бот → Подключение»): он подхватит их сам, как только ответит.
+        </span>
+      </span>
+    )
+  }
+  if (applied?.state === 'applied') {
+    const time = applied.at
+      ? new Date(applied.at).toLocaleTimeString('ru-RU', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      : ''
+    return (
+      <span className="flex flex-1 items-start gap-2 text-sm text-success">
+        <Check className="mt-0.5 size-4 shrink-0" />
+        <span>
+          Бот применил настройки{time && ` в ${time}`}. Перезапускать не нужно. Сообщения, уже
+          открытые в чате, сами не меняются — у клиентов новое появится после /start или
+          «Назад».
+        </span>
+      </span>
+    )
+  }
+  return (
+    <span className="flex flex-1 items-center gap-2 text-sm text-success">
+      <Check className="size-4 shrink-0" />
+      {savedNote}
+    </span>
   )
 }
 

@@ -374,7 +374,7 @@ def test_balance_uses_wallet_icon_not_a_card() -> None:
 
     assert ICONS["balance"].emoji_id == ICONS["wallet"].emoji_id
     assert ICONS["balance"].emoji_id != ICONS["card"].emoji_id
-    assert ICONS["balance"].placeholder == "💰"
+    assert ICONS["balance"].placeholder == "👛"  # «Кошелёк» из набора
 
     balance = next(
         b

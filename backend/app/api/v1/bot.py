@@ -127,6 +127,8 @@ class BotStatusOut(BaseModel):
     menu_mode: str
     menu_labels: dict[str, str]
     support_mode: str
+    # Когда бот в последний раз применил настройки (панель ждёт этой отметки).
+    config_applied_at: datetime | None
     discount_percent: int
     discount_until: datetime | None
 
@@ -172,6 +174,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         menu_mode=row.menu_mode or "keyboard",
         menu_labels=dict(row.menu_labels or {}),
         support_mode=row.support_mode or "link",
+        config_applied_at=row.config_applied_at,
         discount_percent=row.discount_percent or 0,
         discount_until=row.discount_until,
     )
@@ -527,7 +530,7 @@ class EmojiModeIn(BaseModel):
 
 
 # Встроенная иконка «✅» из набора бота — ей проверяем, что премиум доступен.
-_SAMPLE_EMOJI_ID = "5260416304224936047"
+_SAMPLE_EMOJI_ID = "5774022692642492953"
 
 
 class EmojiModeOut(BaseModel):

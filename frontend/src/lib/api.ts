@@ -303,6 +303,8 @@ export type ButtonStyle = 'primary' | 'success' | 'danger' | 'none'
 
 export interface BotStatus extends BotSettings {
   support_mode: 'link' | 'bot'
+  /** Когда бот в последний раз применил настройки из панели. */
+  config_applied_at: string | null
   /** Картинка над экранами бота: имя файла и ссылка для предпросмотра. */
   menu_photo: string | null
   menu_photo_url: string | null

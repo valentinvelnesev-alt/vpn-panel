@@ -15,13 +15,19 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from app import config as config_module
-from app import telegram_client
+from app import premium, telegram_client
 from app.support.runner import SupportRunner
 from shared import bus
 from shared.db.models import BotConfig, BotState
 from shared.db.session import session
 
 log = logging.getLogger("bot.supervisor")
+
+# Как часто бот сверяет настройки с базой сам, не дожидаясь команды панели.
+# Команда идёт через Redis без повторов: оборвалось соединение (сон ноутбука,
+# сеть) — и «перечитай настройки» терялась молча, бот жил со старыми до
+# перезапуска. Теперь потерянная команда догоняется за несколько секунд.
+CONFIG_WATCH_INTERVAL = 10
 
 # Через сколько пробовать снова, если старт или polling упали не из-за
 # токена (сеть, Telegram 5xx). Без этого бот после перезагрузки сервера с
@@ -41,6 +47,10 @@ class Supervisor:
         self._retry_task: asyncio.Task | None = None
         self._failures = 0
         self._support = SupportRunner()
+        # Последние настройки, которые мы уже обработали (применили или
+        # попытались): с ними сравнивает сверка с базой.
+        self._last_seen: config_module.Config | None = None
+        self._watcher: asyncio.Task | None = None
 
     # ── Состояние в БД ────────────────────────────────────────────────
     async def _set_state(
@@ -73,6 +83,8 @@ class Supervisor:
 
         async with session() as db:
             config = await config_module.load(db)
+        self._last_seen = config
+        premium.set_enabled(config.premium)
 
         await self._apply_support(config)
         if not config.can_run:
@@ -205,6 +217,32 @@ class Supervisor:
                 self._retry_task.cancel()
         self._retry_task = None
 
+    async def _mark_applied(self) -> None:
+        """Отметка в базе: панель по ней показывает, что бот настройки получил."""
+        try:
+            async with session() as db:
+                row = await db.get(BotConfig, 1)
+                if row is not None:
+                    row.config_applied_at = datetime.now(UTC)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось отметить применение настроек")
+
+    async def watch_config(self) -> None:
+        """Подстраховка к командам панели: раз в несколько секунд сверяем
+        настройки в базе с теми, что бот уже обработал, и применяем разницу."""
+        while True:
+            await asyncio.sleep(CONFIG_WATCH_INTERVAL)
+            try:
+                async with session() as db:
+                    fresh = await config_module.load(db)
+                if self._last_seen is not None and fresh != self._last_seen:
+                    log.info("Настройки в базе изменились, команда не пришла — применяю")
+                    await self.reload()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("Сверка настроек с базой не удалась")
+
     async def _apply_support(self, config: config_module.Config) -> None:
         """Бот поддержки живёт своей жизнью: сбой в нём не должен ронять
         бота продаж, а остановка продаж — гасить поддержку."""
@@ -215,6 +253,8 @@ class Supervisor:
 
     async def shutdown(self) -> None:
         """Полная остановка процесса: и бот продаж, и бот поддержки."""
+        if self._watcher is not None:
+            self._watcher.cancel()
         await self.stop()
         await self._support.stop()
 
@@ -265,6 +305,8 @@ class Supervisor:
         async with self._lock:
             async with session() as db:
                 config = await config_module.load(db)
+            self._last_seen = config
+            premium.set_enabled(config.premium)
 
             await self._apply_support(config)
             if (
@@ -283,13 +325,17 @@ class Supervisor:
                 ):
                     await self._apply_menu_button(self._bot, config)
                 log.info("Конфиг обновлён без перезапуска")
+                await self._mark_applied()
                 return
 
             await self._start_locked()
+            await self._mark_applied()
 
     # ── Приём команд ──────────────────────────────────────────────────
     async def serve(self) -> None:
         await self.start()  # вдруг бот уже включён в панели с прошлого раза
+        await self._mark_applied()
+        self._watcher = asyncio.create_task(self.watch_config())
         # Догоняем платежи, подтверждённые, пока контейнер был выключен —
         # их pub-sub уведомления пропали вместе с недоступным подписчиком.
         await self._catch_up_payments()

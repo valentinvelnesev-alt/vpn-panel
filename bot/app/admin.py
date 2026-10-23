@@ -357,10 +357,10 @@ async def cb_admin_broadcasts(callback: CallbackQuery, config: Config) -> None:
     has_next = (page + 1) * _PAGE_SIZE < total
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_stats_broadcasts:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_stats_broadcasts:{page - 1}"))
     nav.append(InlineKeyboardButton(text=f"Стр. {page + 1}", callback_data="noop"))
     if has_next:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_stats_broadcasts:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="➡️ Дальше", callback_data=f"admin_stats_broadcasts:{page + 1}"))
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[nav, [InlineKeyboardButton(text="↩️ Назад", callback_data="admin_stats")]]

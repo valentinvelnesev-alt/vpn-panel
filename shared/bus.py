@@ -35,7 +35,11 @@ EVENT_BROADCAST_READY = "broadcast_ready"
 
 def _client() -> redis.Redis:
     url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-    return redis.from_url(url, decode_responses=True)
+    # Проверка живости и keepalive: после сна ноутбука или обрыва сети
+    # соединение «зависает» молча, и команды панели переставали приходить.
+    return redis.from_url(
+        url, decode_responses=True, health_check_interval=15, socket_keepalive=True
+    )
 
 
 async def publish(command: str, **payload: Any) -> None:

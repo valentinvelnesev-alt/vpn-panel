@@ -10,6 +10,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
+from app.premium import PremiumEmojiMiddleware
+
 _proxy: str | None = None
 
 
@@ -20,8 +22,12 @@ def set_proxy(url: str | None) -> None:
 
 def make_bot(token: str, proxy: str | None = None) -> Bot:
     url = proxy or _proxy
+    session = AiohttpSession(proxy=url) if url else AiohttpSession()
+    # Во всех ботах (продаж, поддержки, рассылки, уведомления) один общий слой,
+    # который в премиум-режиме подменяет обычные эмодзи на премиум.
+    session.middleware(PremiumEmojiMiddleware())
     return Bot(
         token=token,
-        session=AiohttpSession(proxy=url) if url else None,
+        session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )

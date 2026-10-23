@@ -277,6 +277,12 @@ class BotConfig(Base, TimestampMixin):
     menu_labels: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
     bot_texts: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
 
+    # Когда бот в последний раз применил настройки из панели — панель по
+    # этому отметке показывает, что изменения действительно дошли.
+    config_applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
     # ── Поддержка ─────────────────────────────────────────────────────
     # "link" — кнопка «Поддержка» ведёт на @username или ссылку (support_url);
     # "bot" — отдельный бот поддержки: клиент пишет ему, сообщения попадают

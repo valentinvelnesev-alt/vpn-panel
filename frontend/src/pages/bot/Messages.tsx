@@ -7,6 +7,7 @@ import { TelegramPreview, telegramHtml } from '@/components/telegram'
 import { Button, Card, Textarea } from '@/components/ui'
 import { panel, type BotCopy, type CopyItem } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useApplyConfirmation } from '@/lib/applied'
 import { examples, useBotCopy } from '@/lib/copy'
 
 const effective = (item: CopyItem) => item.value ?? item.default
@@ -31,6 +32,7 @@ function Editor({ copy }: { copy: BotCopy }) {
     Object.fromEntries(items.map((i) => [i.key, effective(i)])),
   )
   const [savedAt, setSavedAt] = useState<number>()
+  const { applied, begin } = useApplyConfirmation()
   const area = useRef<HTMLTextAreaElement>(null)
 
   const serverState = useMemo(
@@ -49,6 +51,7 @@ function Editor({ copy }: { copy: BotCopy }) {
     onSuccess: (data) => {
       queryClient.setQueryData(['bot-copy'], data)
       setSavedAt(Date.now())
+      begin()
     },
   })
 
@@ -212,12 +215,12 @@ function Editor({ copy }: { copy: BotCopy }) {
         pending={save.isPending}
         error={save.isError ? (save.error as Error).message : null}
         savedAt={savedAt}
+        applied={applied}
         onSave={() => save.mutate()}
         onReset={() => {
           save.reset()
           setDrafts(serverState)
         }}
-        savedNote="Сохранено — новые тексты уже в боте, перезапускать не нужно"
       />
     </>
   )

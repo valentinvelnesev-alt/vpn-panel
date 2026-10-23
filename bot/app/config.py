@@ -220,7 +220,9 @@ class Config:
     # @username бота — для ссылки «вернуться в бот» со страницы оплаты.
     bot_username: str | None = None
 
-    loaded_at: datetime | None = None
+    # Момент чтения не участвует в сравнении: два конфига с одинаковыми
+    # настройками равны (на этом держится проверка «настройки изменились»).
+    loaded_at: datetime | None = field(default=None, compare=False)
 
     @property
     def menu_photo_path(self) -> str | None:

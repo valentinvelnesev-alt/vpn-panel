@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { panel, type BotSettings, type BotStatus } from '@/lib/api'
+import { useApplyConfirmation } from '@/lib/applied'
 
 /** Состояние бота. Пока команда запуска ещё не дошла (включён, но
  *  «остановлен») — опрашиваем чаще, чтобы сразу увидеть «работает». */
@@ -52,6 +53,7 @@ export function useBotSettingsDraft(status: BotStatus) {
   const saved = useMemo(() => settingsOf(status), [status])
   const [form, setForm] = useState<BotSettings>(saved)
   const [savedAt, setSavedAt] = useState<number>()
+  const { applied, begin } = useApplyConfirmation()
 
   useEffect(() => setForm(saved), [saved])
 
@@ -63,6 +65,7 @@ export function useBotSettingsDraft(status: BotStatus) {
     onSuccess: (data) => {
       queryClient.setQueryData(['bot'], data)
       setSavedAt(Date.now())
+      begin()
     },
   })
 
@@ -76,6 +79,7 @@ export function useBotSettingsDraft(status: BotStatus) {
     set,
     dirty,
     savedAt,
+    applied,
     save,
     reset: () => {
       save.reset()

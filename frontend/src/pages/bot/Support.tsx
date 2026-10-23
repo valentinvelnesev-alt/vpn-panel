@@ -14,6 +14,7 @@ import {
   Textarea,
 } from '@/components/ui'
 import { panel, type SupportCheck, type SupportInfo } from '@/lib/api'
+import { useApplyConfirmation } from '@/lib/applied'
 import { cn } from '@/lib/cn'
 
 type Mode = 'link' | 'bot'
@@ -268,6 +269,7 @@ function SupportEditor({ info }: { info: SupportInfo }) {
   const [admins, setAdmins] = useState(info.admin_ids.join(', '))
   const [welcome, setWelcome] = useState(info.welcome_text ?? '')
   const [savedAt, setSavedAt] = useState<number>()
+  const { applied, begin } = useApplyConfirmation()
 
   const reset = () => {
     setMode(info.mode)
@@ -312,6 +314,7 @@ function SupportEditor({ info }: { info: SupportInfo }) {
       queryClient.setQueryData(['support'], data)
       queryClient.invalidateQueries({ queryKey: ['bot'] })
       setSavedAt(Date.now())
+      begin()
       check.mutate()
     },
   })
@@ -577,16 +580,12 @@ function SupportEditor({ info }: { info: SupportInfo }) {
               : null
         }
         savedAt={savedAt}
+        applied={applied}
         onSave={() => {
           if (invalid) return
           save.mutate()
         }}
         onReset={reset}
-        savedNote={
-          mode === 'bot'
-            ? 'Сохранено — бот поддержки запускается, перезапускать ничего не нужно'
-            : 'Сохранено — кнопка «Поддержка» в боте уже ведёт по этой ссылке'
-        }
       />
     </>
   )

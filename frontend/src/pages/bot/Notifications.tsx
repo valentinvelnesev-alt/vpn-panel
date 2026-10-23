@@ -5,6 +5,7 @@ import { BotPage } from '@/components/BotShell'
 import { SaveBar, SectionTitle, Toggle } from '@/components/page'
 import { Button, Card, Field, Input } from '@/components/ui'
 import { panel, type BotStatus } from '@/lib/api'
+import { useApplyConfirmation } from '@/lib/applied'
 import { useBotSettingsDraft } from '@/lib/botSettings'
 
 const parseIds = (raw: string) =>
@@ -59,6 +60,7 @@ function NotificationsEditor({ status }: { status: BotStatus }) {
   })
 
   const [savedAt, setSavedAt] = useState<number>()
+  const { applied, begin } = useApplyConfirmation()
   const save = useMutation({
     mutationFn: async () => {
       if (chatInvalid) {
@@ -77,6 +79,7 @@ function NotificationsEditor({ status }: { status: BotStatus }) {
     onSuccess: (data) => {
       queryClient.setQueryData(['bot'], data)
       setSavedAt(Date.now())
+      begin()
     },
   })
 
@@ -171,6 +174,7 @@ function NotificationsEditor({ status }: { status: BotStatus }) {
         pending={save.isPending}
         error={save.isError ? (save.error as Error).message : null}
         savedAt={savedAt}
+        applied={applied}
         onSave={() => save.mutate()}
         onReset={reset}
       />

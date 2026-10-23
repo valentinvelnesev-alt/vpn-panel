@@ -115,6 +115,7 @@ function TrialEditor({ status }: { status: BotStatus }) {
         pending={draft.save.isPending}
         error={draft.error}
         savedAt={draft.savedAt}
+        applied={draft.applied}
         onSave={() => draft.save.mutate(undefined)}
         onReset={draft.reset}
       />
