@@ -359,7 +359,7 @@ async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
     под полем ввода, поэтому для неё нужно отдельное сообщение. Раньше оно
     («🚀 Название») приходило на каждый /start и оставалось в чате; теперь
     отправляется только когда клавиатуру нужно поставить или сменить и сразу
-    удаляется, а название бота стоит первой строкой в самом меню."""
+    не удаляется, а название бота стоит первой строкой в самом меню."""
     wanted = keyboards.keyboard_state(config)
     async with session() as db:
         user = await subs.get_or_create_user(db, message.from_user.id)
@@ -368,19 +368,16 @@ async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
     # убирать нечего — сообщение не нужно вовсе.
     if current == wanted or (current is None and wanted == "none"):
         return
-    # Сообщение нужно только как «носитель» клавиатуры: Telegram не даёт
-    # прикрепить её к меню с inline-кнопками и не даёт потом добавить их
-    # правкой («message can't be edited» — проверено). Поэтому шлём пустой на
-    # вид символ и сразу удаляем: клавиатура остаётся, в чате — только меню.
-    sent = await message.answer(
+    # Сообщение нужно как «носитель» клавиатуры, и УДАЛЯТЬ его нельзя:
+    # Telegram убирает клавиатуру вместе с сообщением, которое её принесло
+    # (так и было: после удаления кнопок у клиента не оказывалось). Править
+    # такое сообщение тоже нельзя («message can't be edited» — проверено на
+    # живом боте). Поэтому шлём невидимый символ один раз за всё время.
+    await message.answer(
         KEYBOARD_CARRIER,
         reply_markup=keyboards.bottom_keyboard(config),
         disable_notification=True,
     )
-    try:
-        await sent.delete()
-    except TelegramBadRequest:
-        pass  # не удалилось — останется пустое сообщение, ничего не ломается
     async with session() as db:
         user = await subs.get_or_create_user(db, message.from_user.id)
         user.keyboard_state = wanted

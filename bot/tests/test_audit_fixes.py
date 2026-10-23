@@ -423,8 +423,8 @@ async def test_bottom_keyboard_sent_once_and_again_after_change(db) -> None:
     await handlers._apply_bottom_keyboard(FakeMessage(), config)
     # Клавиатура ставится один раз, а не на каждый /start.
     assert len(sent) == 1 and isinstance(sent[0], ReplyKeyboardMarkup)
-    # Служебное сообщение удалено сразу — в чате остаётся только меню.
-    assert deleted == [True]
+    # Сообщение с клавиатурой НЕ удаляется: Telegram убрал бы её вместе с ним.
+    assert deleted == []
 
     # Режим «кнопка меню слева» — прежнюю клавиатуру убираем, тоже один раз.
     commands = replace(config, menu_mode="commands")
