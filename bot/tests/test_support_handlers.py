@@ -208,3 +208,16 @@ async def test_messages_in_general_topic_are_ignored(env) -> None:
     bot, dispatcher, tg, _ = env
     await dispatcher.feed_update(bot, message("всем привет", chat=GROUP, user=OPERATOR))
     assert tg.calls == []
+
+
+async def test_inactive_support_does_not_take_clients_but_still_gives_ids(env) -> None:
+    bot, dispatcher, tg, _ = env
+    dispatcher["ctx"].active = False
+
+    await dispatcher.feed_update(bot, message("Помогите", chat=PRIVATE, user=CLIENT))
+    assert tg.sent(CreateForumTopic) == [] and tg.sent(CopyMessage) == []
+    assert "настраивается" in tg.sent(SendMessage)[0].text
+
+    tg.calls.clear()
+    await dispatcher.feed_update(bot, message("/id", chat=GROUP, user=OPERATOR, update_id=9))
+    assert str(CHAT) in tg.sent(SendMessage)[0].text

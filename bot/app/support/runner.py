@@ -65,8 +65,14 @@ async def on_added_to_group(event: ChatMemberUpdated, bot: Bot) -> None:
 
 
 # ── Клиент пишет боту ─────────────────────────────────────────────────
+NOT_READY = "Поддержка ещё настраивается — загляните чуть позже."
+
+
 @router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: Message, ctx: SupportContext) -> None:
+    if not ctx.active:
+        await message.answer(NOT_READY)
+        return
     await message.answer(html.escape(ctx.welcome) if ctx.welcome else service.DEFAULT_WELCOME)
 
 
@@ -74,6 +80,9 @@ async def cmd_start(message: Message, ctx: SupportContext) -> None:
 async def from_client(message: Message, bot: Bot, ctx: SupportContext) -> None:
     user = message.from_user
     if user is None or user.is_bot:
+        return
+    if not ctx.active:
+        await message.answer(NOT_READY)
         return
     if message.content_type.value not in service.RELAYED_TYPES:
         await message.answer("Такой тип сообщений передать не получится — отправьте текст, фото или файл.")
@@ -99,7 +108,7 @@ async def from_client(message: Message, bot: Bot, ctx: SupportContext) -> None:
 # ── Оператор отвечает в теме ──────────────────────────────────────────
 @router.message(F.chat.type.in_({"group", "supergroup"}), F.is_topic_message)
 async def from_operator(message: Message, bot: Bot, ctx: SupportContext) -> None:
-    if message.chat.id != ctx.chat_id or message.message_thread_id is None:
+    if not ctx.active or message.chat.id != ctx.chat_id or message.message_thread_id is None:
         return
     anonymous = bool(message.sender_chat and message.sender_chat.id == message.chat.id)
     sender = message.from_user
@@ -143,20 +152,19 @@ class SupportRunner:
 
     async def apply(self, config) -> None:
         """Приводит запущенное в соответствие с настройками из панели."""
-        wanted = (
-            config.support_mode == "bot"
-            and bool(config.support_token)
-            and bool(config.support_chat_id)
-        )
-        if not wanted:
+        if not config.support_token:
             if self._task is not None:
                 await self.stop()
                 await _set_state("stopped", None)
             return
 
-        signature = (config.support_token, config.support_chat_id)
+        active = config.support_mode == "bot" and bool(config.support_chat_id)
+        signature = (config.support_token,)
         if self.running and signature == self._signature and self._ctx is not None:
-            # Токен и группа те же — подхватываем остальное без перезапуска.
+            # Тот же токен — группу, режим и операторов подхватываем без
+            # перезапуска polling.
+            self._ctx.chat_id = config.support_chat_id
+            self._ctx.active = active
             self._ctx.admin_ids = set(config.support_admin_ids)
             self._ctx.welcome = config.support_welcome
             return
@@ -182,6 +190,7 @@ class SupportRunner:
             bot_username=me.username,
             admin_ids=set(config.support_admin_ids),
             welcome=config.support_welcome,
+            active=active,
         )
         dispatcher = Dispatcher()
         dispatcher["ctx"] = ctx

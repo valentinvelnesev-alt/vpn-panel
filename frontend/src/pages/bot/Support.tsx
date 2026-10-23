@@ -360,7 +360,12 @@ function SupportEditor({ info }: { info: SupportInfo }) {
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
             <span className="flex items-center gap-2">
               <span className={cn('size-2 rounded-full', stateColour)} />
-              Бот поддержки: {info.mode === 'bot' ? stateLabel : 'ещё не включён'}
+              Бот поддержки:{' '}
+              {info.mode === 'bot'
+                ? stateLabel
+                : info.state === 'running'
+                  ? 'подключён — подсказывает ID, клиентов пока не принимает'
+                  : 'ещё не подключён'}
             </span>
             {info.mode === 'bot' && (
               <span className="text-muted">
@@ -451,8 +456,9 @@ function SupportEditor({ info }: { info: SupportInfo }) {
             </p>
             <ul className="list-disc space-y-1 pl-5">
               <li>
-                <b>Само:</b> когда вы добавите бота в группу (шаг 3), он напишет туда её ID, а здесь
-                появится кнопка «Использовать».
+                <b>Само:</b> бот запускается сразу после шага 2. Когда вы добавите его в группу, он
+                напишет туда её ID, а здесь появится кнопка «Использовать». Если группа уже
+                создана — удалите бота из неё и добавьте заново.
               </li>
               <li>
                 <b>Командой:</b> напишите в группе <code>/id</code> — бот ответит ID группы.

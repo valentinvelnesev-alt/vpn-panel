@@ -256,13 +256,58 @@ def _config(**kwargs):
     return SimpleNamespace(**base)
 
 
-async def test_runner_stays_off_in_link_mode_or_without_setup(db) -> None:
+def _fake_bot():
+    class FakeRunnerBot:
+        class session:  # noqa: N801
+            @staticmethod
+            async def close() -> None:
+                pass
+
+        async def get_me(self):
+            return SimpleNamespace(id=999, username="my_support_bot")
+
+    return FakeRunnerBot()
+
+
+async def test_runner_off_without_token(db, monkeypatch) -> None:
     from app.support.runner import SupportRunner
 
     runner = SupportRunner()
-    for config in (_config(support_mode="link"), _config(support_token=None), _config(support_chat_id=None)):
-        await runner.apply(config)
-        assert not runner.running
+    await runner.apply(_config(support_token=None))
+    assert not runner.running
+
+
+async def test_bot_runs_right_after_token_to_help_find_group_id(db, monkeypatch) -> None:
+    """Раньше бот не стартовал без ID группы — а подсказать этот ID должен
+    был он сам (/id и сообщение при добавлении в группу)."""
+    from app.support import runner as runner_module
+
+    async def idle(self, bot, dispatcher):
+        pass
+
+    monkeypatch.setattr(runner_module.telegram_client, "make_bot", lambda token: _fake_bot())
+    monkeypatch.setattr(runner_module.SupportRunner, "_run", idle)
+    monkeypatch.setattr(runner_module, "_set_state", lambda *a, **k: _noop())
+    runner = runner_module.SupportRunner()
+
+    await runner.apply(_config(support_mode="link", support_chat_id=None))
+    assert runner._task is not None and runner._ctx is not None
+    assert runner._ctx.active is False  # клиентов пока не принимаем
+
+    first_task = runner._task
+    # Админ указал группу и включил режим — тот же процесс, без перезапуска.
+    await runner.apply(_config(support_mode="bot", support_chat_id=CHAT, support_admin_ids=[7]))
+    assert runner._task is first_task
+    assert runner._ctx.active is True and runner._ctx.chat_id == CHAT
+    assert runner._ctx.admin_ids == {7}
+
+    # Вернули режим «ссылка» — клиентов снова не принимаем, но /id работает.
+    await runner.apply(_config(support_mode="link"))
+    assert runner._ctx.active is False
+
+
+async def _noop():
+    return None
 
 
 async def test_runner_reports_rejected_token(db, monkeypatch) -> None:

@@ -46,11 +46,16 @@ _recent: dict[int, deque[float]] = defaultdict(deque)
 
 @dataclass
 class SupportContext:
-    chat_id: int
+    chat_id: int | None
     bot_id: int
     bot_username: str | None = None
     admin_ids: set[int] = field(default_factory=set)
     welcome: str | None = None
+    # Бот запускается, как только подключён токен — иначе он не смог бы
+    # подсказать ID группы (/id, сообщение при добавлении в группу). А
+    # принимать клиентов начинает, только когда режим «через бота» включён
+    # и группа указана.
+    active: bool = True
 
 
 def flooding(user_id: int, now: float | None = None) -> bool:
