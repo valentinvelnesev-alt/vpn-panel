@@ -345,6 +345,12 @@ async def _show_menu(target: Message | CallbackQuery, config: Config) -> None:
         await send_new_screen(message, config, text, markup)
 
 
+# Невидимый разделитель U+2063: Telegram не принимает пустой текст, а многие
+# «пустые» символы (U+3164, U+2800, U+200B) он тоже считает пустыми —
+# проверено на живом боте. Этот принимает, и на экране его не видно.
+KEYBOARD_CARRIER = "\u2063"
+
+
 async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
     """Ставит (или убирает) клавиатуру «Меню / Помощь» под полем ввода —
     только если у клиента её ещё нет или в панели её поменяли.
@@ -362,15 +368,19 @@ async def _apply_bottom_keyboard(message: Message, config: Config) -> None:
     # убирать нечего — сообщение не нужно вовсе.
     if current == wanted or (current is None and wanted == "none"):
         return
-    # Сообщение нужно только как «носитель» клавиатуры: как только она
-    # встала, удаляем его — клавиатура у клиента остаётся, а в чате пусто.
+    # Сообщение нужно только как «носитель» клавиатуры: Telegram не даёт
+    # прикрепить её к меню с inline-кнопками и не даёт потом добавить их
+    # правкой («message can't be edited» — проверено). Поэтому шлём пустой на
+    # вид символ и сразу удаляем: клавиатура остаётся, в чате — только меню.
     sent = await message.answer(
-        "...", reply_markup=keyboards.bottom_keyboard(config), disable_notification=True
+        KEYBOARD_CARRIER,
+        reply_markup=keyboards.bottom_keyboard(config),
+        disable_notification=True,
     )
     try:
         await sent.delete()
     except TelegramBadRequest:
-        pass  # не удалилось — останется «...», ничего не ломается
+        pass  # не удалилось — останется пустое сообщение, ничего не ломается
     async with session() as db:
         user = await subs.get_or_create_user(db, message.from_user.id)
         user.keyboard_state = wanted
