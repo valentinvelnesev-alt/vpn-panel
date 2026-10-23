@@ -24,18 +24,32 @@ const STATE_VIEW: Record<SupportInfo['state'], [string, string]> = {
   error: ['bg-danger', 'ошибка'],
 }
 
-/** Скриншот к шагу: кладётся в frontend/public/guide/support-N.png и
- *  показывается сам, как только файл появился; нет файла — блока нет. */
-function GuideImage({ n }: { n: number }) {
-  const [missing, setMissing] = useState(false)
-  if (missing) return null
+interface Shot {
+  /** Файл из frontend/public/guide/ — на скриншоте уже нарисованы стрелки. */
+  file: string
+  caption: string
+}
+
+/** Скриншоты шага с подписями. Нет файла — этого кадра просто нет. */
+function Shots({ items }: { items: Shot[] }) {
+  const [missing, setMissing] = useState<string[]>([])
+  const shown = items.filter((s) => !missing.includes(s.file))
+  if (shown.length === 0) return null
   return (
-    <img
-      src={`/guide/support-${n}.png`}
-      alt={`Шаг ${n}`}
-      onError={() => setMissing(true)}
-      className="mt-3 max-h-96 rounded-2xl border object-contain"
-    />
+    <div className="grid items-start gap-4 pt-1 sm:grid-cols-2">
+      {shown.map((shot) => (
+        <figure key={shot.file} className="space-y-1.5">
+          <img
+            src={`/guide/${shot.file}`}
+            alt={shot.caption}
+            loading="lazy"
+            onError={() => setMissing((m) => [...m, shot.file])}
+            className="w-full rounded-2xl border"
+          />
+          <figcaption className="text-xs text-muted">{shot.caption}</figcaption>
+        </figure>
+      ))}
+    </div>
   )
 }
 
@@ -44,12 +58,14 @@ function Step({
   title,
   done,
   optional,
+  shots,
   children,
 }: {
   n: number
   title: string
   done?: boolean
   optional?: boolean
+  shots?: Shot[]
   children: ReactNode
 }) {
   return (
@@ -71,7 +87,7 @@ function Step({
       <div className="space-y-2 text-sm text-muted [&_b]:text-fg [&_code]:rounded [&_code]:bg-bg [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-fg">
         {children}
       </div>
-      <GuideImage n={n} />
+      {shots && <Shots items={shots} />}
     </Card>
   )
 }
@@ -358,17 +374,27 @@ function SupportEditor({ info }: { info: SupportInfo }) {
             </p>
           )}
 
-          <Step n={1} title="Создайте группу и включите «Темы»" done={items.topics}>
+          <Step
+            n={1}
+            title="Создайте группу и включите «Темы»"
+            done={items.topics}
+            shots={[
+              { file: 'support-1-1.png', caption: '1. Откройте группу, нажмите на её название — и «Изм.» вверху справа' },
+              { file: 'support-1-2.png', caption: '2. Пролистайте вниз и выберите «Темы»' },
+              { file: 'support-1-3.png', caption: '3. Включите переключатель' },
+              { file: 'support-1-4.png', caption: '4. Готово: расположение «Список» удобнее всего' },
+            ]}
+          >
             <ol className="list-decimal space-y-1 pl-5">
               <li>
                 В Telegram: <b>Новая группа</b> → назовите её, например, «Поддержка». Добавьте
                 любого участника — группу нельзя создать пустой (потом его можно убрать).
               </li>
               <li>
-                Откройте группу → нажмите на её название → <b>Изменить</b> (карандаш).
+                Откройте группу → нажмите на её название → <b>«Изм.»</b>.
               </li>
               <li>
-                Включите переключатель <b>«Темы»</b> (Topics) и сохраните.
+                Выберите <b>«Темы»</b> и включите переключатель. Выйдите кнопкой «Готово».
               </li>
             </ol>
             <p>
@@ -379,7 +405,17 @@ function SupportEditor({ info }: { info: SupportInfo }) {
 
           <TokenStep info={info} />
 
-          <Step n={3} title="Добавьте бота в группу администратором" done={items.admin}>
+          <Step
+            n={3}
+            title="Добавьте бота в группу администратором"
+            done={items.admin}
+            shots={[
+              {
+                file: 'support-3-1.png',
+                caption: 'Нажмите «Добавить» в группе, введите юзернейм бота и выберите его в списке',
+              },
+            ]}
+          >
             <ol className="list-decimal space-y-1 pl-5">
               <li>
                 Откройте группу → <b>Добавить участника</b> → найдите бота
