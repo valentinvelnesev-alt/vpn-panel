@@ -99,7 +99,7 @@ function TrialEditor({ status }: { status: BotStatus }) {
         {form.require_channel_sub && (
           <Field
             label="Канал"
-            hint="Например @mychannel. Ссылку для кнопки «Наш канал» задают в «Меню и тексты»."
+            hint="Например @mychannel. Ссылку для кнопки «Наш канал» задают в «Меню и кнопки»."
           >
             <Input
               value={form.channel_id ?? ''}

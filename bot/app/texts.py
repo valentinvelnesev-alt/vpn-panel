@@ -7,6 +7,7 @@
 """
 
 from app.icons import ICONS
+from shared import botcopy
 from shared.db.models import EmojiMode
 
 PremiumMap = dict[str, str]
@@ -52,17 +53,14 @@ def render(
 
 
 # ── Шаблоны ───────────────────────────────────────────────────────────
+# Стандартные тексты, которые правятся в панели, лежат в shared/botcopy.py;
+# здесь — остальные, которые не настраиваются.
 WELCOME_DEFAULT = (
     "{@shield} <b>{brand}</b>\n\n"
     "Быстрый и безопасный VPN. Выберите тариф или попробуйте бесплатно."
 )
 
-SUBSCRIPTION_ACTIVE = (
-    "{@check} <b>Подписка активна</b>\n\n"
-    "Действует до: <b>{until}</b>\n"
-    "Осталось: <b>{left}</b>\n\n"
-    "Ссылка для подключения:\n<code>{url}</code>"
-)
+SUBSCRIPTION_ACTIVE = botcopy.default_message("subscription_active")
 
 SUBSCRIPTION_ACTIVE_CONFIG = (
     "{@check} <b>Подписка активна</b>\n\n"
@@ -71,16 +69,9 @@ SUBSCRIPTION_ACTIVE_CONFIG = (
     "Конфигурацию (файл .conf) скачайте в «Мои подписки» → ключ → «Скачать конфиг»."
 )
 
-SUBSCRIPTION_NONE = (
-    "{@clock} <b>Подписки нет</b>\n\n"
-    "Выберите тариф — доступ выдаётся сразу после оплаты."
-)
+SUBSCRIPTION_NONE = botcopy.default_message("subscription_none")
 
-TRIAL_GRANTED = (
-    "{@gift} <b>Пробный период активирован</b>\n\n"
-    "Доступ открыт на {days} — до <b>{until}</b>.\n\n"
-    "Ссылка для подключения:\n<code>{url}</code>"
-)
+TRIAL_GRANTED = botcopy.default_message("trial_granted")
 
 TRIAL_GRANTED_CONFIG = (
     "{@gift} <b>Пробный период активирован</b>\n\n"
@@ -97,27 +88,17 @@ CONFIG_CAPTION = (
 TRIAL_USED = "{@warning} Пробный период уже использован."
 TRIAL_DISABLED = "{@warning} Пробный период сейчас недоступен."
 
-PLANS_HEADER = "{@card} <b>Выберите тариф</b>"
+PLANS_HEADER = botcopy.default_message("plans_header")
 NO_PLANS = "{@info} Тарифы ещё не настроены. Загляните позже."
 
-CHANNEL_REQUIRED = (
-    "{@warning} <b>Нужна подписка на канал</b>\n\n"
-    "Подпишитесь на наш канал — и возвращайтесь к боту."
-)
+CHANNEL_REQUIRED = botcopy.default_message("channel_required")
 
 DEVICES_HEADER = "{@devices} <b>Ваши устройства</b>\n\n"
 DEVICES_EMPTY = "{@devices} Подключённых устройств пока нет."
 
-EXPIRY_WARNING = (
-    "{@clock} <b>Подписка заканчивается</b>\n\n"
-    "Осталось: <b>{left}</b>, до <b>{until}</b>.\n"
-    "Продлите, чтобы не потерять доступ."
-)
+EXPIRY_WARNING = botcopy.default_message("expiry_warning")
 
-EXPIRED = (
-    "{@cross} <b>Подписка закончилась</b>\n\n"
-    "Доступ отключён. Продлите — и всё заработает снова."
-)
+EXPIRED = botcopy.default_message("expired")
 
 HELP = (
     "{@info} <b>Помощь</b>\n\n"

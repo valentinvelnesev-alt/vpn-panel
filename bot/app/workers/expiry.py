@@ -45,11 +45,11 @@ def _window_for(expire_at: datetime, now: datetime) -> str | None:
 async def _notify(bot: Bot, config: Config, user: BotUser, window: str) -> bool:
     expire_at = user.expire_at
     if window == "expired":
-        text = texts.render(texts.EXPIRED, config.emoji_mode, config.premium_emoji)
+        text = texts.render(config.message("expired"), config.emoji_mode, config.premium_emoji)
     else:
         left = "1 день" if window == "1d" else "3 дня"
         text = texts.render(
-            texts.EXPIRY_WARNING,
+            config.message("expiry_warning"),
             config.emoji_mode,
             config.premium_emoji,
             left=left,

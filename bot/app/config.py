@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared import botcopy
 from shared.crypto import decrypt
 
 # Общий том с панелью, подключён боту только на чтение.
@@ -175,6 +176,9 @@ class Config:
     menu_hidden: frozenset[str] = frozenset()
     menu_columns: int = 1
     menu_styles: dict[str, str] = field(default_factory=dict)
+    # Свои подписи кнопок и тексты сообщений (реестр — shared/botcopy.py).
+    menu_labels: dict[str, str] = field(default_factory=dict)
+    bot_texts: dict[str, str] = field(default_factory=dict)
     # "keyboard" — «Меню»/«Помощь» под полем ввода, "commands" — кнопка меню
     # Telegram слева от поля.
     menu_mode: str = "keyboard"
@@ -232,6 +236,18 @@ class Config:
     @property
     def can_run(self) -> bool:
         return bool(self.enabled and self.token)
+
+    def label(self, key: str, **values: object) -> str:
+        """Подпись кнопки: своя из панели или стандартная."""
+        text = self.menu_labels.get(key) or botcopy.default_button(key)
+        for name, value in values.items():
+            text = text.replace("{%s}" % name, str(value))
+        return text
+
+    def message(self, key: str) -> str:
+        """Шаблон сообщения: свой из панели или стандартный. Подстановки
+        делает texts.render / t()."""
+        return self.bot_texts.get(key) or botcopy.default_message(key)
 
     def shows(self, button: str) -> bool:
         """Не скрыта ли кнопка в панели (Бот → Меню бота)."""
@@ -403,6 +419,8 @@ async def load(db: AsyncSession) -> Config:
         menu_hidden=frozenset(row.menu_hidden or []),
         menu_columns=min(max(int(row.menu_columns or 1), 1), 3),
         menu_styles=dict(row.menu_styles or {}),
+        menu_labels=dict(row.menu_labels or {}),
+        bot_texts=dict(row.bot_texts or {}),
         menu_mode=row.menu_mode or "keyboard",
         plans=[plan_view(p) for p in plans],
         traffic_packages=[traffic_view(p) for p in packages],

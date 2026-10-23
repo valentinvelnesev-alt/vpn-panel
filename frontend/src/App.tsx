@@ -17,6 +17,7 @@ const BotNotifications = lazy(() => import('@/pages/bot/Notifications'))
 const BotPlansPage = lazy(() => import('@/pages/bot/Plans'))
 const BotTrial = lazy(() => import('@/pages/bot/Trial'))
 const BotSupport = lazy(() => import('@/pages/bot/Support'))
+const BotMessages = lazy(() => import('@/pages/bot/Messages'))
 const Broadcasts = lazy(() => import('@/pages/Broadcasts'))
 const Clients = lazy(() => import('@/pages/Clients'))
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
@@ -86,6 +87,7 @@ export default function App() {
           <Route path="bot" element={<BotConnection />} />
           <Route path="bot/menu" element={<BotMenu />} />
           <Route path="bot/support" element={<BotSupport />} />
+          <Route path="bot/messages" element={<BotMessages />} />
           <Route path="bot/plans" element={<BotPlansPage />} />
           <Route path="bot/trial" element={<BotTrial />} />
           <Route path="bot/bonuses" element={<BotBonuses />} />

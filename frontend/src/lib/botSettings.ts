@@ -34,6 +34,7 @@ const SETTINGS_KEYS: (keyof BotSettings)[] = [
   'menu_hidden',
   'menu_columns',
   'menu_styles',
+  'menu_labels',
   'menu_mode',
 ]
 

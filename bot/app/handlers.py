@@ -424,7 +424,7 @@ async def cmd_start(message: Message, config: Config, bot: Bot, state: FSMContex
 
     if not await _channel_ok(bot, config, message.from_user.id):
         await message.answer(
-            t(config, texts.CHANNEL_REQUIRED),
+            t(config, config.message("channel_required")),
             reply_markup=keyboards.channel_gate(config),
         )
         return
@@ -512,13 +512,13 @@ async def _show_subscription(target: Message | CallbackQuery, config: Config) ->
     if active:
         text = t(
             config,
-            texts.SUBSCRIPTION_ACTIVE if url else texts.SUBSCRIPTION_ACTIVE_CONFIG,
+            config.message("subscription_active") if url else texts.SUBSCRIPTION_ACTIVE_CONFIG,
             until=_date(expire_at),
             left=_left(expire_at),
             url=url,
         )
     else:
-        text = t(config, texts.SUBSCRIPTION_NONE)
+        text = t(config, config.message("subscription_none"))
 
     markup = keyboards.back_to_menu(config)
     if isinstance(target, CallbackQuery):
@@ -562,7 +562,7 @@ async def cb_trial(callback: CallbackQuery, config: Config, bot: Bot) -> None:
         config,
         t(
             config,
-            texts.TRIAL_GRANTED_CONFIG if files else texts.TRIAL_GRANTED,
+            texts.TRIAL_GRANTED_CONFIG if files else config.message("trial_granted"),
             days=_plural(config.trial_days, "день", "дня", "дней"),
             until=_date(expire_at),
             url=url or "—",
@@ -668,7 +668,7 @@ def _plans_header(
     elif category_title:
         text = t(config, "{@card} <b>{title}</b>\n\nВыберите период подписки:", title=category_title)
     else:
-        text = t(config, texts.PLANS_HEADER)
+        text = t(config, config.message("plans_header"))
     general = config.global_discount()
     if general:
         until = f" до {_date(config.discount_until)}" if config.discount_until else ""
@@ -1403,7 +1403,7 @@ async def cb_my_subscriptions(callback: CallbackQuery, config: Config) -> None:
     text = (
         t(config, "{@key} <b>Ваши подписки ({count})</b>\n\nВыберите нужную:", count=len(rows))
         if rows
-        else t(config, texts.SUBSCRIPTION_NONE)
+        else t(config, config.message("subscription_none"))
     )
     await screen(callback.message, config, text, keyboards.subscriptions_menu(config, rows, titles))
     await callback.answer()

@@ -130,7 +130,7 @@ async def _apply(payment_id: int) -> Applied | None:
                 description=f"{payment.provider} #{payment.external_id}",
             )
             text = texts.render(
-                "{@check} Баланс пополнен на {amount} ₽",
+                config.message("payment_topup_paid"),
                 config.emoji_mode,
                 config.premium_emoji,
                 amount=f"{payment.amount_kopeks / 100:.2f}",
@@ -173,7 +173,7 @@ async def _apply(payment_id: int) -> Applied | None:
             # Скидка из промокода — на одну покупку.
             user.discount_percent = 0
             text = texts.render(
-                "{@check} Оплата получена, подписка «{title}» действует до {until}",
+                config.message("payment_plan_paid"),
                 config.emoji_mode,
                 config.premium_emoji,
                 title=plan.title,

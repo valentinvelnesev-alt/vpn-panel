@@ -5,6 +5,7 @@ import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
+  type Ref,
   type TextareaHTMLAttributes,
 } from 'react'
 import { cn } from '@/lib/cn'
@@ -55,7 +56,7 @@ export function Input({
 export function Textarea({
   className,
   ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: Ref<HTMLTextAreaElement> }) {
   return (
     <textarea
       className={cn(

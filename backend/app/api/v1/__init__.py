@@ -6,6 +6,7 @@ from app.api.v1 import (
     auth,
     backups,
     bot,
+    bot_texts,
     broadcasts,
     clients,
     dashboard,
@@ -31,6 +32,7 @@ api_router.include_router(dashboard.router)
 api_router.include_router(nodes.router)
 api_router.include_router(users.router)
 api_router.include_router(bot.router)
+api_router.include_router(bot_texts.router)
 api_router.include_router(ad_links.router)
 api_router.include_router(support.router)
 api_router.include_router(clients.router)

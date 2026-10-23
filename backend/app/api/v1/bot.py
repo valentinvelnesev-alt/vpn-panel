@@ -12,6 +12,7 @@ from app.api.deps import CurrentAdmin, DbSession
 from app.core.config import settings
 from app.services import telegram
 from app.services.links import normalize_support_link
+from shared.botcopy import CopyError, validate_button
 from app.services.telegram import TelegramError
 from shared import bus
 from shared.crypto import decrypt, encrypt, mask
@@ -124,6 +125,7 @@ class BotStatusOut(BaseModel):
     menu_columns: int
     menu_styles: dict[str, str]
     menu_mode: str
+    menu_labels: dict[str, str]
     support_mode: str
     discount_percent: int
     discount_until: datetime | None
@@ -168,6 +170,7 @@ def _status(row: BotConfig) -> BotStatusOut:
         menu_columns=row.menu_columns or 1,
         menu_styles=dict(row.menu_styles or {}),
         menu_mode=row.menu_mode or "keyboard",
+        menu_labels=dict(row.menu_labels or {}),
         support_mode=row.support_mode or "link",
         discount_percent=row.discount_percent or 0,
         discount_until=row.discount_until,
@@ -397,9 +400,25 @@ class BotSettingsIn(BaseModel):
     menu_styles: dict[str, Literal["primary", "success", "danger", "none"]] = Field(
         default_factory=dict
     )
+    # Свои подписи кнопок (ключи — shared/botcopy.py BUTTONS); пустая —
+    # стандартная.
+    menu_labels: dict[str, str] = Field(default_factory=dict, max_length=64)
     # keyboard — «Меню»/«Помощь» под полем ввода; commands — кнопка меню
     # Telegram слева от поля (не перекрывает жест «назад»).
     menu_mode: Literal["keyboard", "commands"] = "commands"
+
+    @field_validator("menu_labels")
+    @classmethod
+    def _labels(cls, value: dict[str, str]) -> dict[str, str]:
+        clean: dict[str, str] = {}
+        for key, text in value.items():
+            try:
+                checked = validate_button(key, text or "")
+            except CopyError as exc:
+                raise ValueError(str(exc)) from None
+            if checked is not None:
+                clean[key] = checked
+        return clean
 
     @field_validator("support_url")
     @classmethod

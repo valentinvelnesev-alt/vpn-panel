@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LayoutList,
   LifeBuoy,
+  MessageSquareText,
   Link2,
   LogOut,
   Menu,
@@ -88,7 +89,8 @@ function useNav(): Group[] {
           badge: 'bot',
           children: [
             { to: '/bot', label: 'Подключение', icon: Plug, end: true },
-            { to: '/bot/menu', label: 'Меню и тексты', icon: LayoutList },
+            { to: '/bot/menu', label: 'Меню и кнопки', icon: LayoutList },
+            { to: '/bot/messages', label: 'Тексты сообщений', icon: MessageSquareText },
             { to: '/bot/support', label: 'Поддержка', icon: LifeBuoy },
             { to: '/bot/plans', label: 'Тарифы', icon: Tags },
             { to: '/bot/trial', label: 'Пробный период', icon: Gift },

@@ -254,6 +254,29 @@ export interface BotSettings {
   menu_columns: number
   menu_styles: Record<string, ButtonStyle>
   menu_mode: 'keyboard' | 'commands'
+  menu_labels: Record<string, string>
+}
+
+export interface CopyVariable {
+  name: string
+  hint: string
+  example: string
+}
+
+export interface CopyItem {
+  key: string
+  default: string
+  title: string
+  where: string
+  variables: CopyVariable[]
+  /** Своё значение; null — используется стандартное. */
+  value: string | null
+}
+
+export interface BotCopy {
+  messages: CopyItem[]
+  buttons: CopyItem[]
+  icons: Record<string, string>
 }
 
 export interface SupportInfo {
@@ -584,6 +607,9 @@ export const panel = {
     return api<BotStatus>('/bot/menu-photo', { method: 'PUT', body: form })
   },
   deleteMenuPhoto: () => api<BotStatus>('/bot/menu-photo', { method: 'DELETE' }),
+  botCopy: () => api<BotCopy>('/bot/texts'),
+  saveBotTexts: (values: Record<string, string>) =>
+    api<BotCopy>('/bot/texts', { method: 'PUT', json: { values } }),
   support: () => api<SupportInfo>('/bot/support'),
   saveSupport: (json: {
     mode: 'link' | 'bot'

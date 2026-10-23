@@ -272,6 +272,11 @@ class BotConfig(Base, TimestampMixin):
     # «назад» на телефоне).
     menu_mode: Mapped[str] = mapped_column(String(16), default="commands", nullable=False)
 
+    # Свои подписи кнопок и тексты сообщений: только то, что отличается от
+    # стандартного (реестр — shared/botcopy.py).
+    menu_labels: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    bot_texts: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+
     # ── Поддержка ─────────────────────────────────────────────────────
     # "link" — кнопка «Поддержка» ведёт на @username или ссылку (support_url);
     # "bot" — отдельный бот поддержки: клиент пишет ему, сообщения попадают

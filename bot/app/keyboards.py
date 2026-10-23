@@ -20,6 +20,7 @@ from aiogram.types import (
 
 from app.config import Config, PlanView, discounted_kopeks, format_rub
 from app.icons import icon_id, style_or_none
+from shared import botcopy
 
 TOPUP_PRESETS_RUB = [100, 300, 500, 1000]
 # Границы одного пополнения баланса, ₽.
@@ -101,6 +102,11 @@ def _btn(
     return InlineKeyboardButton(**kwargs)
 
 
+def label(config: Config | None, key: str) -> str:
+    """Подпись кнопки из настроек; без конфига — стандартная."""
+    return config.label(key) if config is not None else botcopy.default_button(key)
+
+
 def _markup(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[r for r in rows if r])
 
@@ -136,43 +142,43 @@ def main_menu(
     """
     items: list[tuple[str, str, dict]] = []  # (ключ, подпись, параметры кнопки)
     if trial_available and config.shows("trial"):
-        items.append(("trial", "Попробовать бесплатно", {"callback_data": "trial", "icon": "trial"}))
+        items.append(("trial", config.label("trial"), {"callback_data": "trial", "icon": "trial"}))
 
     if has_subscription:
-        items.append(("buy", "Продлить подписку", {"callback_data": "renew", "icon": "clock"}))
+        items.append(("buy", config.label("renew"), {"callback_data": "renew", "icon": "clock"}))
         if config.allow_multiple_subscriptions:
-            items.append(("buy_more", "Купить ещё одну", {"callback_data": "plans_new", "icon": "buy"}))
+            items.append(("buy_more", config.label("buy_more"), {"callback_data": "plans_new", "icon": "buy"}))
         if config.shows("subscriptions"):
             items.append(
-                ("subscriptions", "Подписка", {"callback_data": "my_subscriptions", "icon": "subscription"})
+                ("subscriptions", config.label("subscriptions"), {"callback_data": "my_subscriptions", "icon": "subscription"})
             )
         # «Подключиться» без единого ключа вело бы в тупик — прячем.
         if config.shows("connect"):
-            items.append(("connect", "Подключиться", {"callback_data": "connect", "icon": "connect"}))
+            items.append(("connect", config.label("connect"), {"callback_data": "connect", "icon": "connect"}))
     else:
-        items.append(("buy", "Купить подписку", {"callback_data": "plans", "icon": "buy"}))
+        items.append(("buy", config.label("buy"), {"callback_data": "plans", "icon": "buy"}))
 
     if config.shows("profile"):
-        items.append(("profile", "Личный кабинет", {"callback_data": "profile", "icon": "profile"}))
+        items.append(("profile", config.label("profile"), {"callback_data": "profile", "icon": "profile"}))
     if config.shows("balance"):
         items.append(
-            ("balance", f"Баланс: {format_rub(balance_kopeks)}", {"callback_data": "wallet", "icon": "balance"})
+            ("balance", config.label("balance", balance=format_rub(balance_kopeks)), {"callback_data": "wallet", "icon": "balance"})
         )
     if config.referral_visible and config.shows("referral"):
-        items.append(("referral", "Рефералка", {"callback_data": "referral", "icon": "referral"}))
+        items.append(("referral", config.label("referral"), {"callback_data": "referral", "icon": "referral"}))
     if config.shows("promo"):
-        items.append(("promo", "Промокод", {"callback_data": "promo", "icon": "promo"}))
+        items.append(("promo", config.label("promo"), {"callback_data": "promo", "icon": "promo"}))
     if config.channel_url and config.shows("channel"):
-        items.append(("channel", "Наш канал", {"url": config.channel_url, "icon": "channel"}))
+        items.append(("channel", config.label("channel"), {"url": config.channel_url, "icon": "channel"}))
     if config.support_url and config.shows("support"):
-        items.append(("support", "Поддержка", {"url": config.support_url, "icon": "support"}))
+        items.append(("support", config.label("support"), {"url": config.support_url, "icon": "support"}))
 
     buttons = [
         _btn(config, text, style=menu_style(config, key), **params) for key, text, params in items
     ]
     # «Статистика» — только владельцам рекламных ссылок, отдельной строкой внизу.
     stats_row = (
-        [_btn(config, "Статистика", callback_data="ad_stats", style=menu_style(config, "ad_stats"))]
+        [_btn(config, config.label("ad_stats"), callback_data="ad_stats", style=menu_style(config, "ad_stats"))]
         if has_ad_stats
         else None
     )
@@ -190,11 +196,11 @@ def main_menu(
 
 
 def back_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:
-    return _markup([[_btn(config, "Назад", callback_data="menu", icon="back")]])
+    return _markup([[_btn(config, label(config, "back"), callback_data="menu", icon="back")]])
 
 
 def cancel_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:
-    return _markup([[_btn(config, "Отмена", callback_data="menu", icon="cancel", style="danger")]])
+    return _markup([[_btn(config, label(config, "cancel"), callback_data="menu", icon="cancel", style="danger")]])
 
 
 def channel_gate(config: Config) -> InlineKeyboardMarkup:
@@ -257,7 +263,7 @@ def categories_menu(
     ]
     for category_id, title in plan_categories(config):
         rows.append([_category_button(config, category_id, title, prefix, discount_percent)])
-    rows.append([_btn(config, "Отмена", callback_data=back, icon="cancel", style="danger")])
+    rows.append([_btn(config, label(config, "cancel"), callback_data=back, icon="cancel", style="danger")])
     return _markup(rows)
 
 
@@ -311,9 +317,9 @@ def plans_menu(
 
     has_categories = bool(plan_categories(config))
     back_target = ("plans" if prefix == "buy" else back) if has_categories else back
-    tail = [_btn(config, "Назад", callback_data=back_target, icon="back")]
+    tail = [_btn(config, label(config, "back"), callback_data=back_target, icon="back")]
     if back_target != "menu":
-        tail.append(_btn(config, "Отмена", callback_data="menu", icon="cancel", style="danger"))
+        tail.append(_btn(config, label(config, "cancel"), callback_data="menu", icon="cancel", style="danger"))
     rows.append(tail)
     return _markup(rows)
 
@@ -345,8 +351,8 @@ def providers_menu(
         rows.append([_btn(config, "Бесплатно (админ)", callback_data=f"pay:{purpose}:free:{target}", icon="gift")])
     rows.append(
         [
-            _btn(config, "Назад", callback_data=back, icon="back"),
-            _btn(config, "Отмена", callback_data="menu", icon="cancel", style="danger"),
+            _btn(config, label(config, "back"), callback_data=back, icon="back"),
+            _btn(config, label(config, "cancel"), callback_data="menu", icon="cancel", style="danger"),
         ]
     )
     return _markup(rows)
@@ -357,7 +363,7 @@ def pay_menu(config: Config, *, pay_url: str, payment_id: int) -> InlineKeyboard
         [
             [_btn(config, "Оплатить", url=pay_url, icon="sbp", style="success")],
             [_btn(config, "Проверить оплату", callback_data=f"checkpay:{payment_id}", icon="refresh")],
-            [_btn(config, "Отмена", callback_data="menu", icon="cancel", style="danger")],
+            [_btn(config, label(config, "cancel"), callback_data="menu", icon="cancel", style="danger")],
         ]
     )
 
@@ -383,7 +389,7 @@ def subscriptions_menu(
         )
     if not rows:
         rows.append([_btn(config, "Купить подписку", callback_data="plans", icon="buy", style="primary")])
-    rows.append([_btn(config, "Назад", callback_data="menu", icon="back")])
+    rows.append([_btn(config, label(config, "back"), callback_data="menu", icon="back")])
     return _markup(rows)
 
 
@@ -399,7 +405,7 @@ def traffic_packages_menu(config: Config, subscription_id: int) -> InlineKeyboar
         ]
         for package in config.traffic_packages
     ]
-    rows.append([_btn(config, "Назад", callback_data=f"viewsub:{subscription_id}", icon="back")])
+    rows.append([_btn(config, label(config, "back"), callback_data=f"viewsub:{subscription_id}", icon="back")])
     return _markup(rows)
 
 
@@ -442,7 +448,7 @@ def subscription_detail_menu(
             [_btn(config, "Докупить трафик", callback_data=f"subtraffic:{subscription_id}", icon="traffic")]
         )
     rows.append([_btn(config, "Устройства", callback_data=f"subdevices:{subscription_id}", icon="devices")])
-    rows.append([_btn(config, "Назад", callback_data="my_subscriptions", icon="back")])
+    rows.append([_btn(config, label(config, "back"), callback_data="my_subscriptions", icon="back")])
     return _markup(rows)
 
 
@@ -460,7 +466,7 @@ def devices_menu(config: Config, has_devices: bool, *, subscription_id: int) -> 
                 )
             ]
         )
-    rows.append([_btn(config, "Назад", callback_data=f"viewsub:{subscription_id}", icon="back")])
+    rows.append([_btn(config, label(config, "back"), callback_data=f"viewsub:{subscription_id}", icon="back")])
     return _markup(rows)
 
 
@@ -482,7 +488,7 @@ def profile_menu(config: Config, *, has_subscription: bool = False) -> InlineKey
         legal.append(_btn(config, "Пользовательское соглашение", url=config.terms_url, icon="doc"))
     if legal:
         rows.append(legal)
-    rows.append([_btn(config, "Назад", callback_data="menu", icon="back")])
+    rows.append([_btn(config, label(config, "back"), callback_data="menu", icon="back")])
     return _markup(rows)
 
 
@@ -496,7 +502,7 @@ def wallet_menu(config: Config) -> InlineKeyboardMarkup:
             presets[:2],
             presets[2:],
             [_btn(config, "Другая сумма", callback_data="topup_custom")],
-            [_btn(config, "Назад", callback_data="menu", icon="back")],
+            [_btn(config, label(config, "back"), callback_data="menu", icon="back")],
         ]
     )
 
@@ -505,7 +511,7 @@ def support_menu(config: Config) -> InlineKeyboardMarkup:
     return _markup(
         [
             [_btn(config, "Написать в поддержку", url=config.support_url, icon="support", style="primary")],
-            [_btn(config, "Назад", callback_data="menu", icon="back")],
+            [_btn(config, label(config, "back"), callback_data="menu", icon="back")],
         ]
     )
 
@@ -531,6 +537,6 @@ def referral_menu(config: Config, link: str) -> InlineKeyboardMarkup:
                     style="success",
                 )
             ],
-            [_btn(config, "Назад", callback_data="menu", icon="back")],
+            [_btn(config, label(config, "back"), callback_data="menu", icon="back")],
         ]
     )

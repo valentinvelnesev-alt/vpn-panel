@@ -5,7 +5,9 @@ import { BotPage } from '@/components/BotShell'
 import { SaveBar, SectionTitle, Toggle } from '@/components/page'
 import { Button, Card, Field, Input, Textarea } from '@/components/ui'
 import { panel, type BotStatus, type ButtonStyle } from '@/lib/api'
+import { TelegramPreview, telegramHtml, type PreviewButton } from '@/components/telegram'
 import { useBotSettingsDraft } from '@/lib/botSettings'
+import { byKey, useBotCopy } from '@/lib/copy'
 import { cn } from '@/lib/cn'
 
 // Совпадает с MENU_BUTTONS в bot/app/keyboards.py. Третий элемент — можно
@@ -39,12 +41,32 @@ const STYLE_OPTIONS: [ButtonStyle, string, string][] = [
   ['success', 'Зелёная', 'bg-emerald-500'],
   ['danger', 'Красная', 'bg-rose-500'],
 ]
-const PREVIEW_STYLE: Record<ButtonStyle, string> = {
-  none: 'bg-white/10 text-fg',
-  primary: 'bg-sky-500/90 text-white',
-  success: 'bg-emerald-500/90 text-white',
-  danger: 'bg-rose-500/90 text-white',
+// Какие подписи правятся в строке: «Купить / Продлить» — две, у остальных одна.
+const LABEL_KEYS: Record<string, [string, string][]> = {
+  trial: [['trial', '']],
+  buy: [
+    ['buy', 'Нет подписки'],
+    ['renew', 'Есть подписка'],
+  ],
+  buy_more: [['buy_more', '']],
+  subscriptions: [['subscriptions', '']],
+  connect: [['connect', '']],
+  profile: [['profile', '']],
+  balance: [['balance', '']],
+  referral: [['referral', '']],
+  promo: [['promo', '']],
+  channel: [['channel', '']],
+  support: [['support', '']],
 }
+
+const PREVIEW_VARS: Record<string, string> = { balance: '150 ₽' }
+
+const SAMPLE_MENU = (hasSub: boolean) =>
+  '{@rocket} <b>{brand}</b>\n\n👤 Иван\n' +
+  (hasSub
+    ? 'Подписка: <b>активна</b>\nДо: <b>30.11.2026</b> (12 дней)'
+    : 'Подписка: <b>отсутствует</b>') +
+  '\n\nВыберите действие:'
 
 function MenuPhotoCard({ status }: { status: BotStatus }) {
   const queryClient = useQueryClient()
@@ -135,7 +157,44 @@ function MenuEditor({ status }: { status: BotStatus }) {
     if (key === 'support') return !!form.support_url || status.support_mode === 'bot'
     return true
   }
-  const preview = MENU_BUTTONS.filter(([key, , , inMenu]) => inMenu && visible(key))
+  const { data: copy } = useBotCopy()
+  const defaults = byKey(copy?.buttons)
+  const [hasSub, setHasSub] = useState(false)
+
+  const setLabel = (key: string, value: string) => {
+    const next = { ...form.menu_labels }
+    if (value.trim()) next[key] = value
+    else delete next[key]
+    set('menu_labels', next)
+  }
+  const labelOf = (key: string) => {
+    let text = form.menu_labels[key]?.trim() || defaults[key]?.default || key
+    for (const [name, value] of Object.entries(PREVIEW_VARS)) text = text.replace(`{${name}}`, value)
+    return text
+  }
+
+  // Те же правила, что в боте (keyboards.main_menu): что показывается новому
+  // клиенту и что — тому, у кого уже есть подписка.
+  const previewButtons: PreviewButton[] = []
+  const add = (styleKey: string, labelKey: string) =>
+    previewButtons.push({ text: labelOf(labelKey), style: styleOf(styleKey) })
+  if (!hasSub && visible('trial')) add('trial', 'trial')
+  if (hasSub) {
+    add('buy', 'renew')
+    if (visible('buy_more')) add('buy_more', 'buy_more')
+    if (visible('subscriptions')) add('subscriptions', 'subscriptions')
+    if (visible('connect')) add('connect', 'connect')
+  } else {
+    add('buy', 'buy')
+  }
+  for (const key of ['profile', 'balance', 'referral', 'promo', 'channel', 'support']) {
+    if (visible(key)) add(key, key)
+  }
+  const menuHtml = telegramHtml(
+    form.welcome_text || SAMPLE_MENU(hasSub),
+    { brand: status.bot_name || 'VPN' },
+    copy?.icons ?? {},
+  )
 
   const toggleMenu = (key: string) =>
     set(
@@ -160,11 +219,11 @@ function MenuEditor({ status }: { status: BotStatus }) {
       </Card>
 
       <Card className="space-y-5">
-        <SectionTitle hint="Включайте и выключайте кнопки и выбирайте их цвет — справа видно, как меню выглядит у клиента.">
+        <SectionTitle hint="Включайте кнопки, меняйте подписи и цвета — справа сразу видно, как меню выглядит у клиента. Пустая подпись — стандартная.">
           Кнопки меню
         </SectionTitle>
 
-        <div className="grid gap-5 md:grid-cols-[1fr_15rem]">
+        <div className="grid gap-5 lg:grid-cols-[1fr_17rem]">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-muted">Кнопок в ряд:</span>
@@ -185,76 +244,122 @@ function MenuEditor({ status }: { status: BotStatus }) {
               ))}
             </div>
             <div className="divide-y divide-border/60 rounded-2xl border border-border/60">
-              {MENU_BUTTONS.map(([key, label, hideable]) => (
-                <div
-                  key={key}
-                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
-                >
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="size-4 accent-[var(--color-accent)]"
-                      checked={!form.menu_hidden.includes(key)}
-                      disabled={!hideable}
-                      onChange={() => toggleMenu(key)}
-                    />
-                    {label}
-                  </label>
-                  {COLORABLE.has(key) && (
-                    <div className="flex gap-1" role="radiogroup" aria-label={`Цвет: ${label}`}>
-                      {STYLE_OPTIONS.map(([style, title, swatch]) => (
-                        <button
-                          key={style}
-                          type="button"
-                          title={title}
-                          aria-label={title}
-                          onClick={() => set('menu_styles', { ...form.menu_styles, [key]: style })}
-                          className={cn(
-                            'size-6 rounded-full border-2',
-                            swatch,
-                            styleOf(key) === style ? 'border-fg' : 'border-transparent opacity-60',
-                          )}
+              {MENU_BUTTONS.map(([key, label, hideable]) => {
+                const labels = LABEL_KEYS[key] ?? []
+                return (
+                  <div key={key} className="space-y-2 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="size-4 accent-[var(--color-accent)]"
+                          checked={!form.menu_hidden.includes(key)}
+                          disabled={!hideable}
+                          onChange={() => toggleMenu(key)}
                         />
-                      ))}
+                        {label}
+                      </label>
+                      {COLORABLE.has(key) && (
+                        <div className="flex gap-1" role="radiogroup" aria-label={`Цвет: ${label}`}>
+                          {STYLE_OPTIONS.map(([style, title, swatch]) => (
+                            <button
+                              key={style}
+                              type="button"
+                              title={title}
+                              aria-label={title}
+                              onClick={() => set('menu_styles', { ...form.menu_styles, [key]: style })}
+                              className={cn(
+                                'size-6 rounded-full border-2',
+                                swatch,
+                                styleOf(key) === style ? 'border-fg' : 'border-transparent opacity-60',
+                              )}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {labels.length > 0 && (
+                      <div className={cn('grid gap-2', labels.length > 1 && 'sm:grid-cols-2')}>
+                        {labels.map(([labelKey, caption]) => (
+                          <label key={labelKey} className="block">
+                            {caption && <span className="mb-1 block text-xs text-muted">{caption}</span>}
+                            <Input
+                              className="h-9 rounded-xl"
+                              maxLength={64}
+                              value={form.menu_labels[labelKey] ?? ''}
+                              placeholder={defaults[labelKey]?.default ?? ''}
+                              onChange={(e) => setLabel(labelKey, e.target.value)}
+                              aria-label={`Подпись: ${label}`}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
             <p className="text-xs text-muted">
-              «Наш канал» и «Поддержка» появятся, когда ниже указаны их ссылки; «Купить ещё
+              В подписи баланса можно оставить <code>{'{balance}'}</code> — туда подставится сумма
+              клиента. «Наш канал» и «Поддержка» появятся, когда указаны их ссылки; «Купить ещё
               одну» — если в «Тарифах» разрешено несколько подписок.
             </p>
           </div>
 
-          <div className="md:sticky md:top-6 md:self-start">
-            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">
+          <div className="space-y-2 lg:sticky lg:top-6 lg:self-start">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted">
               Так увидит клиент
             </p>
-            <div className="rounded-3xl bg-[#17212b] p-3 shadow-inner">
-              <div className="mb-2 rounded-2xl bg-[#182533] px-3 py-2 text-xs text-white/80">
-                {status.bot_name || 'Ваш бот'}
-                <br />
-                <span className="text-white/50">Выберите действие:</span>
-              </div>
-              <div
-                className="grid gap-1"
-                style={{ gridTemplateColumns: `repeat(${form.menu_columns}, minmax(0, 1fr))` }}
-              >
-                {preview.map(([key, label]) => (
-                  <span
-                    key={key}
-                    className={cn(
-                      'truncate rounded-lg px-2 py-1.5 text-center text-[11px]',
-                      PREVIEW_STYLE[styleOf(key)],
-                    )}
-                  >
-                    {label.replace(' / Продлить', '')}
-                  </span>
-                ))}
-              </div>
+            <div className="flex gap-1 rounded-full border border-border/60 p-1 text-xs">
+              {(
+                [
+                  [false, 'Новый клиент'],
+                  [true, 'С подпиской'],
+                ] as const
+              ).map(([value, title]) => (
+                <button
+                  key={title}
+                  type="button"
+                  onClick={() => setHasSub(value)}
+                  className={cn(
+                    'flex-1 rounded-full px-3 py-1.5 transition-colors',
+                    hasSub === value ? 'bg-accent/15 font-medium text-accent' : 'text-muted',
+                  )}
+                >
+                  {title}
+                </button>
+              ))}
             </div>
+            <TelegramPreview
+              name={status.bot_name || 'Ваш бот'}
+              html={menuHtml}
+              buttons={previewButtons}
+              columns={form.menu_columns}
+            />
           </div>
+        </div>
+      </Card>
+
+      <Card className="space-y-4">
+        <SectionTitle hint="Кнопки, которые есть почти на каждом экране бота.">
+          Кнопки «Назад» и «Отмена»
+        </SectionTitle>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(
+            [
+              ['back', 'Назад'],
+              ['cancel', 'Отмена'],
+            ] as const
+          ).map(([labelKey, title]) => (
+            <Field key={labelKey} label={title}>
+              <Input
+                maxLength={64}
+                value={form.menu_labels[labelKey] ?? ''}
+                placeholder={defaults[labelKey]?.default ?? title}
+                onChange={(e) => setLabel(labelKey, e.target.value)}
+              />
+            </Field>
+          ))}
         </div>
       </Card>
 
@@ -352,8 +457,8 @@ function MenuEditor({ status }: { status: BotStatus }) {
 export default function BotMenu() {
   return (
     <BotPage
-      title="Меню и тексты"
-      description="Что клиент видит в боте: приветствие, картинка, кнопки и их цвета."
+      title="Меню и кнопки"
+      description="Главное меню бота: приветствие, картинка, кнопки — их подписи, цвета и порядок."
     >
       {(status) => (
         <>
