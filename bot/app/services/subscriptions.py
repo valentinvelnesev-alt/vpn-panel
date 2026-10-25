@@ -94,6 +94,55 @@ async def _create_or_adopt(client: RemnawaveClient, **kwargs):
         return await client.update_user(remote.ref, **fields)
 
 
+_SOURCE_LABEL = {
+    "trial": "пробный период",
+    "wallet": "оплата с баланса",
+    "auto_renewal": "автопродление с баланса",
+    "renewal": "продление",
+    "referral_reward": "награда за друга",
+}
+
+
+def describe_grant(user: BotUser | None, source: str, *, note: str = "") -> str:
+    """Заметка к аккаунту в панели: кто и за что получил доступ.
+
+    Раньше писалось сухое «Выдано ботом: wallet» — в списке пользователей
+    панели нельзя было понять, чей это ключ и что значит wallet."""
+    label = _SOURCE_LABEL.get(source, source)
+    who = ""
+    if user is not None:
+        who = " ".join(
+            part
+            for part in (user.first_name, f"@{user.username}" if user.username else "")
+            if part
+        )
+    text = f"Бот: {who or 'клиент'} — {label}"
+    return f"{text} ({note})" if note else text
+
+
+async def _update_or_recreate(client, ref, create_kwargs: dict, **fields):
+    """PATCH пользователя, а если его удалили в панели (404) — создаём заново.
+
+    Ключ мог пропасть из Remnawave (чистка тестовых, ручное удаление), а
+    оплата за него уже пришла или списывается с баланса: вместо вечного
+    «не удалось выдать доступ» поднимаем аккаунт заново под тем же именем."""
+    try:
+        return await client.update_user(ref, **fields)
+    except RemnawaveError as exc:
+        if exc.status_code != 404:
+            raise
+        log.warning("Ключ %s не найден в панели — создаю заново: %s", ref, create_kwargs["username"])
+        return await _create_or_adopt(client, **create_kwargs)
+
+
+def _relink(subscription: BotSubscription, remote: RemoteUser) -> None:
+    """После пересоздания ключа в панели у него новые id/uuid — обновляем."""
+    if remote.uuid:
+        subscription.remnawave_uuid = remote.uuid
+    if remote.id is not None:
+        subscription.remnawave_id = remote.id
+
+
 async def _reset_traffic_if_limited(client: RemnawaveClient, ref, plan: PlanView) -> None:
     """Тариф с лимитом трафика: при оплате счётчик обнуляется, иначе
     клиент в LIMITED так и останется без доступа."""
@@ -235,9 +284,20 @@ async def grant(
 
     client = client_for(config)
     try:
+        create_kwargs = dict(
+            username=_username_for(user.telegram_id),
+            expire_at=expire_at,
+            internal_squad_uuids=squad_uuids,
+            telegram_id=user.telegram_id,
+            hwid_device_limit=hwid_limit,
+            traffic_limit_bytes=traffic_limit_bytes,
+            description=describe_grant(user, source),
+        )
         if user.remnawave_uuid:
-            remote = await client.update_user(
+            remote = await _update_or_recreate(
+                client,
                 stored_ref(user.remnawave_uuid),
+                create_kwargs,
                 expireAt=expire_at.isoformat(),
                 status="ACTIVE",
                 activeInternalSquads=squad_uuids,
@@ -245,16 +305,7 @@ async def grant(
                 trafficLimitBytes=traffic_limit_bytes,
             )
         else:
-            remote = await _create_or_adopt(
-                client,
-                username=_username_for(user.telegram_id),
-                expire_at=expire_at,
-                internal_squad_uuids=squad_uuids,
-                telegram_id=user.telegram_id,
-                hwid_device_limit=hwid_limit,
-                traffic_limit_bytes=traffic_limit_bytes,
-                description=f"Выдано ботом: {source}",
-            )
+            remote = await _create_or_adopt(client, **create_kwargs)
     finally:
         await client.aclose()
 
@@ -343,7 +394,7 @@ async def grant_trial(db: AsyncSession, config: Config, user: BotUser) -> BotUse
             telegram_id=user.telegram_id,
             hwid_device_limit=config.trial_hwid_limit,
             traffic_limit_bytes=config.trial_traffic_gb * 1024**3,
-            description="Выдано ботом: trial",
+            description=describe_grant(user, "trial"),
         )
     finally:
         await client.aclose()
@@ -387,18 +438,23 @@ async def grant_bonus_days(
 
     client = client_for(config)
     try:
+        create_kwargs = dict(
+            username=_username_for(user.telegram_id),
+            expire_at=expire_at,
+            internal_squad_uuids=config.trial_squad_uuids,
+            telegram_id=user.telegram_id,
+            hwid_device_limit=config.trial_hwid_limit,
+            description=describe_grant(user, source),
+        )
         if user.remnawave_uuid:
-            remote = await client.extend_expiration(stored_ref(user.remnawave_uuid), expire_at)
-        else:
-            remote = await _create_or_adopt(
+            remote = await _update_or_recreate(
                 client,
-                username=_username_for(user.telegram_id),
-                expire_at=expire_at,
-                internal_squad_uuids=config.trial_squad_uuids,
-                telegram_id=user.telegram_id,
-                hwid_device_limit=config.trial_hwid_limit,
-                description=f"Выдано ботом: {source}",
+                stored_ref(user.remnawave_uuid),
+                create_kwargs,
+                expireAt=expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             )
+        else:
+            remote = await _create_or_adopt(client, **create_kwargs)
     finally:
         await client.aclose()
 
@@ -663,33 +719,38 @@ async def create_subscription(
 
     client = client_for(config)
     try:
+        create_kwargs = dict(
+            username=_new_key_username(user.telegram_id, payment_id),
+            expire_at=expire_at,
+            internal_squad_uuids=plan.squad_uuids,
+            telegram_id=user.telegram_id,
+            hwid_device_limit=plan.hwid_limit,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            description=describe_grant(user, source),
+        )
         if trial is not None:
-            remote = await client.update_user(
+            create_kwargs["username"] = trial.username
+            create_kwargs["description"] = describe_grant(user, source, note="с пробного")
+            remote = await _update_or_recreate(
+                client,
                 trial.remote_ref,
+                create_kwargs,
                 expireAt=expire_at.isoformat(),
                 status="ACTIVE",
                 activeInternalSquads=plan.squad_uuids,
                 hwidDeviceLimit=plan.hwid_limit,
                 trafficLimitBytes=plan.traffic_limit_bytes,
-                description=f"Выдано ботом: {source} (апгрейд с триала)",
+                description=create_kwargs["description"],
             )
-            await _reset_traffic_if_limited(client, trial.remote_ref, plan)
+            await _reset_traffic_if_limited(client, remote.ref, plan)
         else:
-            remote = await _create_or_adopt(
-                client,
-                username=_new_key_username(user.telegram_id, payment_id),
-                expire_at=expire_at,
-                internal_squad_uuids=plan.squad_uuids,
-                telegram_id=user.telegram_id,
-                hwid_device_limit=plan.hwid_limit,
-                traffic_limit_bytes=plan.traffic_limit_bytes,
-                description=f"Выдано ботом: {source}",
-            )
+            remote = await _create_or_adopt(client, **create_kwargs)
     finally:
         await client.aclose()
 
     if trial is not None:
         subscription = trial
+        _relink(subscription, remote)
         subscription.subscription_url = remote.subscription_url or trial.subscription_url
         subscription.expire_at = remote.expire_at or expire_at
         subscription.plan_id = plan.id
@@ -750,17 +811,31 @@ async def extend_subscription(
         else _base_for_extension(subscription.expire_at) + timedelta(days=plan.days)
     )
 
+    owner = await db.get(BotUser, subscription.user_id)
+    description = describe_grant(owner, source)
     client = client_for(config)
     try:
-        remote = await client.update_user(
+        create_kwargs = dict(
+            username=subscription.username,
+            expire_at=expire_at or _base_for_extension(None) + timedelta(days=plan.days),
+            internal_squad_uuids=plan.squad_uuids,
+            telegram_id=owner.telegram_id if owner else None,
+            hwid_device_limit=plan.hwid_limit,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            description=description,
+        )
+        remote = await _update_or_recreate(
+            client,
             subscription.remote_ref,
+            create_kwargs,
             expireAt=expire_at.isoformat() if expire_at else None,
             status="ACTIVE",
             activeInternalSquads=plan.squad_uuids,
             hwidDeviceLimit=plan.hwid_limit,
             trafficLimitBytes=plan.traffic_limit_bytes,
         )
-        await _reset_traffic_if_limited(client, subscription.remote_ref, plan)
+        _relink(subscription, remote)
+        await _reset_traffic_if_limited(client, remote.ref, plan)
     finally:
         await client.aclose()
 
@@ -814,7 +889,14 @@ async def add_traffic(
 
     client = client_for(config)
     try:
-        remote = await client.get_user(subscription.remote_ref)
+        try:
+            remote = await client.get_user(subscription.remote_ref)
+        except RemnawaveError as exc:
+            if exc.status_code == 404:
+                raise TrafficUnavailable(
+                    "Этот ключ удалён на сервере — напишите в поддержку"
+                ) from exc
+            raise
         if remote.traffic_limit_bytes <= 0:
             raise TrafficUnavailable("На этой подписке трафик безлимитный — докупать нечего")
         new_limit = remote.traffic_limit_bytes + package.traffic_bytes

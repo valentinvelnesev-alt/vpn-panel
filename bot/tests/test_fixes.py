@@ -1117,3 +1117,35 @@ async def test_check_connection_reports_when_all_404(monkeypatch) -> None:
             await client.check_connection()
     finally:
         await client.aclose()
+
+
+async def test_update_or_recreate_rebuilds_deleted_remote_user(monkeypatch):
+    """Ключ удалён в Remnawave (404) — оплата не падает, аккаунт создаётся заново."""
+    from app.services import subscriptions as subs
+    from shared.remnawave import RemnawaveError
+
+    class Client:
+        async def update_user(self, ref, **fields):
+            raise RemnawaveError("Объект не найден в Remnawave", 404)
+
+    created = {}
+
+    async def fake_create(client, **kwargs):
+        created.update(kwargs)
+        return "new-remote"
+
+    monkeypatch.setattr(subs, "_create_or_adopt", fake_create)
+    result = await subs._update_or_recreate(Client(), 5, {"username": "tg_1"}, status="ACTIVE")
+    assert result == "new-remote"
+    assert created == {"username": "tg_1"}
+
+
+def test_describe_grant_is_human_readable():
+    from app.services.subscriptions import describe_grant
+
+    class U:
+        first_name = "Анна"
+        username = "anna"
+
+    assert describe_grant(U(), "wallet") == "Бот: Анна @anna — оплата с баланса"
+    assert describe_grant(None, "trial") == "Бот: клиент — пробный период"

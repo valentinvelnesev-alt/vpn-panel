@@ -1043,6 +1043,8 @@ async def _pay_from_wallet(
                 await callback.answer(str(exc), show_alert=True)
                 return
         paid_note = "Выдано бесплатно" if free else "Оплачено с баланса"
+        key_id: int | None = None
+        key_auto_renew = False
 
         try:
             if pay.package is not None:
@@ -1073,6 +1075,7 @@ async def _pay_from_wallet(
                     until=_date(subscription.expire_at),
                 )
                 label = pay.plan.full_title
+                key_id, key_auto_renew = subscription.id, subscription.auto_renew
             else:
                 subscription = await subs.create_subscription(
                     db, config, user, pay.plan, source=source, amount_kopeks=amount_kopeks
@@ -1085,6 +1088,7 @@ async def _pay_from_wallet(
                     until=_date(subscription.expire_at),
                 )
                 label = pay.plan.full_title
+                key_id, key_auto_renew = subscription.id, subscription.auto_renew
         except subs.TrafficUnavailable as exc:
             await callback.answer(str(exc), show_alert=True)
             raise  # откатывает списание вместе с сессией
@@ -1105,7 +1109,12 @@ async def _pay_from_wallet(
             else ("renewal" if pay.subscription is not None else "purchase")
         )
 
-    await screen(callback.message, config, done, keyboards.back_to_menu(config))
+    markup = (
+        keyboards.paid_with_autorenew(config, key_id, key_auto_renew)
+        if key_id is not None and not free
+        else keyboards.back_to_menu(config)
+    )
+    await screen(callback.message, config, done, markup)
     await callback.answer()
     if free:
         return

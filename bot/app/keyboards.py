@@ -199,6 +199,23 @@ def back_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:
     return _markup([[_btn(config, label(config, "back"), callback_data="menu", icon="back")]])
 
 
+def paid_with_autorenew(config: Config, subscription_id: int, enabled: bool) -> InlineKeyboardMarkup:
+    """Экран после оплаты с баланса: тут же можно включить автопродление."""
+    return _markup(
+        [
+            [
+                _btn(
+                    config,
+                    f"Автоплатёж: {'Вкл' if enabled else 'Выкл'}",
+                    callback_data=f"subautorenew:{subscription_id}",
+                    icon="autorenew",
+                )
+            ],
+            [_btn(config, label(config, "back"), callback_data="menu", icon="back")],
+        ]
+    )
+
+
 def cancel_to_menu(config: Config | None = None) -> InlineKeyboardMarkup:
     return _markup([[_btn(config, label(config, "cancel"), callback_data="menu", icon="cancel", style="danger")]])
 
