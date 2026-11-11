@@ -53,6 +53,17 @@ trap 'err "Обновление прервано на строке $LINENO: $BAS
 [ "$(id -u)" -eq 0 ] || die "Запустите от root:  sudo bash update.sh"
 [ -f .env ] || die "Файл .env не найден — панель не установлена в этой папке"
 
+# Compose использует одно имя проекта для всех копий репозитория. Если на
+# сервере есть вложенная или другая копия, запуск из неверной папки может
+# пересоздать существующие контейнеры с чужими ключами и настройками.
+EXISTING_POSTGRES=$(docker ps -aq --filter label=com.docker.compose.project=vpn-panel --filter label=com.docker.compose.service=postgres | head -1)
+if [ -n "$EXISTING_POSTGRES" ]; then
+    CONTAINER_DIR=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$EXISTING_POSTGRES")
+    if [ -n "$CONTAINER_DIR" ] && [ "$CONTAINER_DIR" != "<no value>" ] && [ "$(cd "$CONTAINER_DIR" 2>/dev/null && pwd -P || true)" != "$(pwd -P)" ]; then
+        die "Контейнеры панели запущены из другой папки: $CONTAINER_DIR. Обновляйте панель из неё."
+    fi
+fi
+
 inf "
 ╭──────────────────────────────────────╮
 │          Обновление панели           │
@@ -68,9 +79,31 @@ ok "Бэкап .env → $BACKUP_FILE"
 # ── 2. Бэкап базы данных ──────────────────────────────────────────────
 get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- || true; }
 DEPLOY_MODE=$(get DEPLOY_MODE)
+case "$DEPLOY_MODE" in domain|ip) ;; *) die "Неизвестный DEPLOY_MODE в .env: $DEPLOY_MODE" ;; esac
+PROXY_MODE=$(get PROXY_MODE)
 OVERLAY=$DEPLOY_MODE
-[ "$(get PROXY_MODE)" = nginx ] && OVERLAY=nginx
+case "$PROXY_MODE" in
+    nginx) OVERLAY=nginx ;;
+    caddy) ;;
+    "")
+        # Старые установки могли сохранить только выбор файлов Compose.
+        case "$(get COMPOSE_FILE)" in *docker-compose.nginx.yml*) OVERLAY=nginx ;; esac
+        ;;
+    *) die "Неизвестный PROXY_MODE в .env: $PROXY_MODE" ;;
+esac
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.${OVERLAY}.yml"
+
+# Другие команды docker compose без -f читают COMPOSE_FILE из .env. Держим
+# его в согласии с выбранным прокси, чтобы они не заняли порты Nginx.
+EXPECTED_COMPOSE_FILE="docker-compose.yml:docker-compose.${OVERLAY}.yml"
+if [ "$(get COMPOSE_FILE)" != "$EXPECTED_COMPOSE_FILE" ]; then
+    TMP_ENV=$(mktemp .env.update.XXXXXX)
+    chmod 600 "$TMP_ENV"
+    sed '/^COMPOSE_FILE=/d' .env > "$TMP_ENV"
+    printf 'COMPOSE_FILE=%s\n' "$EXPECTED_COMPOSE_FILE" >> "$TMP_ENV"
+    mv "$TMP_ENV" .env
+    ok "Режим Docker Compose приведён в соответствие с настройками прокси"
+fi
 
 DB_BACKUP="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S).sql"
 DB_USER=$(get POSTGRES_USER); DB_USER=${DB_USER:-vpnpanel}
@@ -90,10 +123,8 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
-    ok "Уже установлена последняя версия"
-    exit 0
-fi
-
+    ok "Код уже последней версии — проверяю образы и запуск"
+else
 # --no-pager: в интерактивном терминале git открывает less и ждёт
 # клавишу — снаружи это выглядит как зависание, а мобильный SSH-клиент
 # потом рвёт соединение. Список ограничен: после переписывания истории
@@ -109,6 +140,7 @@ echo
 # нечего — можно безопасно перезаписать код версией из репозитория.
 git reset --hard origin/main
 ok "Код обновлён"
+fi
 
 # ── 3.5 Публичный адрес сервера (для ссылок на фото рассылок) ─────────
 # Установки до этого обновления не сохраняли его в .env — бэкенд считал
