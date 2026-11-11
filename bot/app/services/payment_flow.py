@@ -125,6 +125,7 @@ async def _create_at_provider(
             description=description,
             order_id=str(payment.id),
             return_url="https://t.me",
+            telegram_id=user.telegram_id,
         )
         external = PlategaClient.transaction_id(result)
         if not external:

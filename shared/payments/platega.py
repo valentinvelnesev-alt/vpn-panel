@@ -44,7 +44,8 @@ class PlategaClient:
         }
 
     async def create_transaction(
-        self, *, amount_rub: float, description: str, order_id: str, return_url: str
+        self, *, amount_rub: float, description: str, order_id: str, return_url: str,
+        telegram_id: int,
     ) -> dict[str, Any]:
         """Возвращает тело ответа Platega с `transactionId` и `redirect`.
 
@@ -60,6 +61,7 @@ class PlategaClient:
             "failedUrl": return_url,
             # Свой идентификатор заказа: виден в ответе статуса как `payload`.
             "payload": order_id,
+            "metadata": {"user_email": f"{telegram_id}@telegram.org"},
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(

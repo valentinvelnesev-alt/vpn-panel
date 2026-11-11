@@ -503,6 +503,7 @@ async def test_platega_request_shape_matches_live_api(db, config, monkeypatch) -
     assert "amount" not in captured["body"]
     assert captured["body"]["return"] and captured["body"]["failedUrl"]
     assert captured["body"]["payload"] == str(payment.id)
+    assert captured["body"]["metadata"] == {"user_email": "777@telegram.org"}
     assert payment.external_id == "tx-live-1"
     assert pay_url == "https://pay.platega.io?id=tx-live-1"
 
