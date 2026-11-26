@@ -1,6 +1,6 @@
 """Клиент Platega (приём СБП/карт).
 
-Публичный API `https://app.platega.io` — не привязан к конкретному проекту,
+Публичный API `https://app.platega.com` — не привязан к конкретному проекту,
 в отличие от старого бота, где сюда же были вписаны чужие мерчант-данные.
 
 Формат тела запроса проверен на боевом мерчанте: сумма идёт вложенным
@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-BASE_URL = "https://app.platega.io"
+BASE_URL = "https://app.platega.com"
 
 # Способ оплаты: 2 — СБП QR.
 PAYMENT_METHOD_SBP = 2

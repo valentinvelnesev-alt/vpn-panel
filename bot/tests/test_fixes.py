@@ -483,7 +483,7 @@ async def test_platega_request_shape_matches_live_api(db, config, monkeypatch) -
             json={
                 "paymentMethod": "SBPQR",
                 "transactionId": "tx-live-1",
-                "redirect": "https://pay.platega.io?id=tx-live-1",
+                "redirect": "https://pay.platega.com?id=tx-live-1",
                 "status": "PENDING",
             },
             request=httpx.Request("POST", url),
@@ -498,14 +498,14 @@ async def test_platega_request_shape_matches_live_api(db, config, monkeypatch) -
         provider=PaymentProvider.PLATEGA, plan_id=1, description="Оплата тарифа",
     )
 
-    assert captured["url"].endswith("/transaction/process")
+    assert captured["url"] == "https://app.platega.com/transaction/process"
     assert captured["body"]["paymentDetails"] == {"amount": 399.0, "currency": "RUB"}
     assert "amount" not in captured["body"]
     assert captured["body"]["return"] and captured["body"]["failedUrl"]
     assert captured["body"]["payload"] == str(payment.id)
     assert captured["body"]["metadata"] == {"user_email": "777@telegram.org"}
     assert payment.external_id == "tx-live-1"
-    assert pay_url == "https://pay.platega.io?id=tx-live-1"
+    assert pay_url == "https://pay.platega.com?id=tx-live-1"
 
 
 def test_platega_response_parsing_and_status() -> None:
